@@ -1,0 +1,154 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Virtual Environment
+venv/
+ENV/
+env/
+.venv/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Project specific
+results/
+*.log
+*.tmp
+.DS_Store
+Thumbs.db
+
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb_checkpoints
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.nox/
+
+# Environment variables
+.env
+.env.local
+
+# Database
+*.db
+*.sqlite
+*.sqlite3
+
+# Output files
+output/
+*.out
+*.err
+
+# Temporary files
+tmp/
+temp/
+*.bak
+*.cache
+
+# Documentation build
+docs/_build/
+site/
+
+# MacOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# Linux
+.directory
+.Trash-*
+
+# Development and debug files
+debug_*.py
+diagnose_*.py
+test_*.py
+!tests/test_mcp_server_integration.py
+!tests/test_phase4_mcp_configuration.py
+!tests/test_phase4_mcp_simulation.py
+*.png
+*.json
+!data/resin_parameters.json
+!examples/sample_request.json
+
+# Internal documentation
+CLAUDE.md
+*_STATUS.md
+*_RESULTS.md
+*_UPDATE.md
+*_SUMMARY.md
+*_PLAN.md
+COMPREHENSIVE_*.md
+CRITICAL_*.md
+IMPLEMENTATION_*.md
+ION_*.md
+IX_MODEL_*.md
+PHASE*.md
+SOPHISTICATED_*.md
+WATER_*.md
+FILES_FOR_PUBLIC_REPO.md
+
+# Test results
+test_results_*.json
+*_results.json
+simulation_test_results.json
+workflow_results.json
+
+# Other development files
+analyze_*.py
+examine_*.py
+monitor_*.py
+setup_databases.py
+error.inp
+
+# Advanced models (keep only production versions)
+tools/advanced_ix_model.py
+tools/enhanced_phreeqpy_engine.py
+tools/final_ix_model.py
+tools/fouling_model.py
+tools/kinetic_model.py
+tools/optimized_ix_model.py
+tools/phreeqc_transport_engine.py
+tools/trace_metals_model.py
+tools/ix_simulation_watertap.py
+
+# Keep only essential directories
+watertap_ix_transport/
+utils/
+config/
+databases/
+
+# Examples to exclude
+examples/ix_example.py
+examples/mcp_client_example.py
