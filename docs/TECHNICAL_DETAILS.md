@@ -38,7 +38,8 @@ The IX Design MCP Server follows a modular architecture designed for extensibili
 - Economic modeling
 
 ### 3. Simulation Tool  
-- PhreeqPy integration
+- **Papermill notebook execution for process isolation**
+- PhreeqPy integration in subprocess
 - Breakthrough curve prediction
 - Performance metrics calculation
 - Water quality progression
@@ -195,10 +196,28 @@ for bv in range(0, max_bed_volumes, step):
         break
 ```
 
+## Process Isolation
+
+### Why Notebook Execution is Required
+WaterTAP and PhreeqPy can conflict with the MCP server process due to:
+- Global state modifications
+- Memory management conflicts
+- Thread safety issues
+- Resource locking
+
+### Papermill Solution
+- Executes notebooks in separate subprocess
+- Isolated Python kernel for each simulation
+- Parameters passed via JSON serialization
+- Results extracted from notebook outputs
+- Complete process isolation from MCP server
+
+This approach matches the RO Design MCP Server architecture and ensures stability.
+
 ## Performance Optimizations
 
 ### 1. Caching
-- PHREEQC database loaded once
+- PHREEQC database loaded once per notebook
 - Resin properties cached
 - Economic factors stored
 

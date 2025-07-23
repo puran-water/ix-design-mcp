@@ -1,8 +1,8 @@
 """
 Ion Exchange Simulation Tool
 
-Executes PhreeqPy simulations for ion exchange systems using direct engine integration.
-Optionally supports Jupyter notebooks for transparency and auditability.
+Executes PhreeqPy simulations for ion exchange systems via papermill notebook execution.
+Notebook execution is REQUIRED for process isolation to prevent WaterTAP/PhreeqPy conflicts.
 """
 
 import os
@@ -250,7 +250,8 @@ def simulate_ix_system(input_data: IXSimulationInput) -> IXSimulationOutput:
     """
     Execute WaterTAP/PhreeqPy simulation for ion exchange system performance.
     
-    This function executes a parameterized Jupyter notebook that:
+    This function executes a parameterized Jupyter notebook to ensure process isolation,
+    preventing conflicts between WaterTAP/PhreeqPy and the MCP server. The notebook:
     1. Creates WaterTAP flowsheet with custom IX unit models
     2. Uses PhreeqPy for multi-component ion exchange calculations
     3. Simulates breakthrough curves with Na+ competition
@@ -286,6 +287,7 @@ def simulate_ix_system(input_data: IXSimulationInput) -> IXSimulationOutput:
         - recommendations: Operational guidance based on results
     
     Simulation Approach:
+        - Executes in isolated subprocess via papermill to prevent conflicts
         - Uses PhreeqPy EXCHANGE blocks for multi-component modeling
         - Accounts for competitive ion exchange (Na+ vs hardness)
         - Models pH changes through exchange cycles
@@ -293,27 +295,12 @@ def simulate_ix_system(input_data: IXSimulationInput) -> IXSimulationOutput:
         - Calculates regeneration requirements and waste volumes
     
     Note:
-        Simulation now uses direct PhreeqPy engine for faster and more reliable results.
-        Notebook execution is available as a fallback option.
+        Notebook execution is REQUIRED (not optional) to ensure process isolation.
+        This prevents WaterTAP/PhreeqPy from conflicting with the MCP server.
     """
     start_time = time.time()
     
-    # Check if WaterTAP model is requested
-    model_type = input_data.simulation_options.get("model_type", "direct")
-    
-    if model_type == "watertap":
-        logger.info("Using WaterTAP IX Transport simulation")
-        from .ix_simulation_watertap import simulate_ix_system as simulate_watertap
-        return simulate_watertap(input_data)
-    
-    # Use direct simulation by default
-    use_direct_simulation = input_data.simulation_options.get("use_direct_simulation", True)
-    
-    if use_direct_simulation:
-        logger.info("Using direct PhreeqPy simulation")
-        return simulate_ix_system_direct(input_data)
-    
-    # Fall back to notebook execution if requested
+    # Ensure papermill is available
     if pm is None:
         raise ImportError("papermill is required for notebook execution. Please install with: pip install papermill")
     
@@ -330,7 +317,7 @@ def simulate_ix_system(input_data: IXSimulationInput) -> IXSimulationOutput:
     template_map = {
         "h_wac_degasser_na_wac": "ix_simulation_hwac_template.ipynb",
         "sac_na_wac_degasser": "ix_simulation_sac_template.ipynb",
-        "na_wac_degasser": "ix_simulation_simple_template.ipynb"
+        "na_wac_degasser": "ix_simulation_nawac_template.ipynb"
     }
     
     template_name = template_map.get(flowsheet_type, "ix_simulation_general_template.ipynb")

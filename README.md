@@ -26,12 +26,15 @@ Generates all three flowsheet alternatives with:
 - Na+ competition factors
 
 ### simulate_ix_system
-Performs detailed breakthrough simulation including:
+Performs detailed breakthrough simulation using **papermill notebook execution** for process isolation:
+- Executes in subprocess to prevent WaterTAP/PhreeqPy conflicts with MCP server
 - Service cycle runtime predictions
 - Regenerant consumption calculations
 - Water quality progression through treatment
 - Breakthrough curve generation
 - Waste volume estimation
+
+**Note**: Notebook execution is REQUIRED (not optional) to ensure process isolation
 
 ## Flowsheet Options
 

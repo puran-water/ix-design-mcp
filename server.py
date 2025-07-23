@@ -97,6 +97,9 @@ async def optimize_ix_configuration_wrapped(input_data: Dict[str, Any]) -> Dict[
     Requires configuration from optimize_ix_configuration tool.
     Returns detailed performance metrics, breakthrough curves, and economics.
     
+    IMPORTANT: Executes via papermill in isolated subprocess to prevent WaterTAP/PhreeqPy
+    conflicts with the MCP server. This notebook execution is REQUIRED, not optional.
+    
     Water composition must use MCAS format (same as optimize tool).
     
     Model Options:

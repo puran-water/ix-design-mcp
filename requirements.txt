@@ -7,7 +7,7 @@ phreeqpython>=1.5.0
 # Data Validation
 pydantic>=2.0.0
 
-# Notebook Execution (optional, for Jupyter integration)
+# Notebook Execution (REQUIRED for process isolation)
 papermill>=2.4.0
 
 # Scientific Computing

@@ -37,6 +37,7 @@ Use this tool to generate all three flowsheet alternatives. The tool automatical
 ### simulate_ix_system
 
 Use this tool to perform detailed performance analysis of a selected configuration:
+- **Executes via papermill in subprocess for process isolation**
 - Breakthrough curve prediction
 - Regenerant consumption optimization
 - Water quality progression through treatment
@@ -46,6 +47,8 @@ Use this tool to perform detailed performance analysis of a selected configurati
 - Detailed design verification
 - Operating cost refinement
 - Performance guarantees
+
+**Important**: The simulation executes in an isolated notebook process to prevent WaterTAP/PhreeqPy from conflicting with the MCP server. This is automatic and required.
 
 ## Water Chemistry Guidelines
 
