@@ -1,0 +1,65 @@
+--- a/watertap_ix_transport/ion_exchange_transport_0D.py
++++ b/watertap_ix_transport/ion_exchange_transport_0D.py
+@@ -719,6 +719,23 @@ class IonExchangeTransport0DData(InitializationMixin, UnitModelBlockData):
+             state_args=state_args_out,
+         )
+         
++        # FIX: Initialize outlet state properly BEFORE any IX calculations
++        # This prevents the 10,000 mg/L default concentration issue
++        outlet_state = self.control_volume.properties_out[0]
++        inlet_state = self.control_volume.properties_in[0]
++        
++        # Set outlet flows based on inlet (will be adjusted by mass balance)
++        for comp in self.config.property_package.component_list:
++            if hasattr(outlet_state.flow_mass_phase_comp, 'Liq') and comp in outlet_state.flow_mass_phase_comp['Liq']:
++                outlet_state.flow_mass_phase_comp['Liq', comp].set_value(
++                    value(inlet_state.flow_mass_phase_comp['Liq', comp])
++                )
++        
++        # Fix outlet mole fractions NOW to prevent MCAS defaults
++        init_log.info("Fixing outlet mole fractions BEFORE IX calculations...")
++        fix_mole_fractions(outlet_state, recalculate_concentrations=True)
++        # END FIX
++        
+         # Import required functions
+         from pyomo.environ import SolverFactory
+         from idaes.core.util.model_statistics import degrees_of_freedom
+@@ -1050,6 +1067,15 @@ class IonExchangeTransport0DData(InitializationMixin, UnitModelBlockData):
+             
+         # Water has no removal
+         self.ion_removal_rate[t, 'H2O'].fix(0)
++        
++        # FIX: Ensure mass_transfer_terms are not fixed (except H2O)
++        # This allows the eq_mass_transfer constraint to update them
++        for j in self.config.property_package.component_list:
++            if j != 'H2O' and (t, 'Liq', j) in self.control_volume.mass_transfer_term:
++                if self.control_volume.mass_transfer_term[t, 'Liq', j].fixed:
++                    logger.info(f"Unfixing mass_transfer_term for {j}")
++                    self.control_volume.mass_transfer_term[t, 'Liq', j].unfix()
++        # END FIX
+             
+         # Track total Na released for debugging
+         total_na_release = 0
+@@ -1099,6 +1125,22 @@ class IonExchangeTransport0DData(InitializationMixin, UnitModelBlockData):
+                     logger.info(f"  {comp} at outlet: {conc_mg_L:.1f} mg/L (MCAS default!)")
+         
+         if suspicious_count > 0:
++            # FIX: Force solve to update outlet based on mass balance
++            logger.info("Solving model to enforce mass balance constraints...")
++            
++            from pyomo.environ import SolverFactory
++            solver = SolverFactory('ipopt')
++            solver.options['tol'] = 1e-8
++            solver.options['max_iter'] = 200
++            
++            # Solve the entire model to enforce constraints
++            results = solver.solve(self, tee=False)
++            
++            if results.solver.termination_condition == 'optimal':
++                logger.info("Successfully enforced mass balance constraints")
++            else:
++                logger.warning(f"Failed to converge mass balance: {results.solver.termination_condition}")
++            # END FIX
+             logger.warning(f"WARNING: {suspicious_count} ions still at 10,000 mg/L after IX calculations")
+             # Try to resolve by solving outlet properties
+             solver = SolverFactory('ipopt')

@@ -1,0 +1,46 @@
+TITLE Direct PHREEQC Test - Sodium Competition
+
+EXCHANGE_SPECIES
+    Na+ + X- = NaX
+        log_k   0.0
+    Ca+2 + 2X- = CaX2
+        log_k   1.6
+
+SOLUTION 0  # Feed with high Na
+    units mg/L
+    Ca 180
+    Na 800
+    Cl 1500 charge
+
+SOLUTION 1-5  # Column
+    units mg/L
+    Na 1000
+    Cl 1540 charge
+
+EXCHANGE 1-5
+    X 0.1
+    -equilibrate 1
+
+TRANSPORT
+    -cells 5
+    -shifts 30
+    -flow_direction forward
+    -boundary_conditions flux flux
+    -punch_frequency 1
+    -punch_cells 5
+
+SELECTED_OUTPUT
+    -file sodium_test.csv
+    -reset false
+    -step
+    -totals Ca Na
+
+USER_PUNCH
+    -headings Step Ca_mg_L Na_mg_L
+    -start
+    10 PUNCH STEP_NO
+    20 PUNCH TOT("Ca") * 40078
+    30 PUNCH TOT("Na") * 22990
+    -end
+
+END

@@ -1,0 +1,21 @@
+
+TITLE Test Database Loading
+DATABASE C:\Program Files\USGS\phreeqc-3.8.6-17100-x64\database\phreeqc.dat
+
+SOLUTION 1
+    units mg/L
+    temp 25
+    pH 7
+    Na 1000
+    Cl 1540 charge
+    
+EXCHANGE 1
+    X 0.1
+    -equilibrate solution 1
+    
+SELECTED_OUTPUT
+    -file test_db.tsv
+    -totals Na
+    -molalities NaX
+    
+END

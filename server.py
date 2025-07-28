@@ -57,7 +57,11 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Create FastMCP instance
+# Configuration constants
+MAX_REQUEST_SIZE = 10 * 1024 * 1024  # 10MB max request size
+REQUEST_TIMEOUT = 300  # 5 minutes timeout for long simulations
+
+# Create FastMCP instance with configuration
 mcp = FastMCP("IX Design Server")
 
 # Register tools with enhanced metadata
@@ -242,6 +246,16 @@ mcp = FastMCP("IX Design Server")
 async def configure_sac_ix(configuration_input: Dict[str, Any]) -> Dict[str, Any]:
     """Configure SAC vessel with hydraulic sizing only."""
     try:
+        # Validate input size
+        import json
+        input_size = len(json.dumps(configuration_input))
+        if input_size > MAX_REQUEST_SIZE:
+            return {
+                "error": "Request too large",
+                "details": f"Request size {input_size} bytes exceeds maximum {MAX_REQUEST_SIZE} bytes",
+                "hint": "Please reduce the size of your request"
+            }
+        
         from tools.sac_configuration import configure_sac_vessel, SACConfigurationInput
         
         # Convert dict to pydantic model
@@ -308,6 +322,14 @@ async def configure_sac_ix(configuration_input: Dict[str, Any]) -> Dict[str, Any
 async def simulate_sac_ix(simulation_input: str) -> Dict[str, Any]:
     """Wrapper for SAC PHREEQC simulation."""
     try:
+        # Validate input size
+        if len(simulation_input) > MAX_REQUEST_SIZE:
+            return {
+                "status": "error",
+                "error": "Request too large",
+                "details": f"Request size {len(simulation_input)} bytes exceeds maximum {MAX_REQUEST_SIZE} bytes"
+            }
+        
         from tools.sac_simulation import simulate_sac_phreeqc, SACSimulationInput
         
         # Parse input JSON
