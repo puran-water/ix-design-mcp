@@ -1,46 +1,47 @@
 # IX Design MCP Server
 
-An MCP (Model Context Protocol) server for ion exchange system design and optimization, specifically tailored for RO pretreatment in industrial wastewater zero liquid discharge (ZLD) applications. This server powers process engineering AI agents with specialized ion exchange design capabilities.
+An MCP (Model Context Protocol) server for SAC ion exchange system design, specifically tailored for RO pretreatment in industrial wastewater applications. This server powers process engineering AI agents with specialized SAC ion exchange design capabilities using Direct PHREEQC simulation.
 
 ## Overview
 
-This MCP server provides AI-powered tools for designing and simulating ion exchange (IX) systems. It automatically selects from three flowsheet configurations based on water chemistry, performs hydraulic sizing, simulates breakthrough curves, and provides comprehensive economic analysis.
+This MCP server provides AI-powered tools for designing and simulating SAC (Strong Acid Cation) ion exchange systems. It performs hydraulic sizing based on industry-standard design parameters and uses Direct PHREEQC engine for accurate breakthrough curve prediction without relying on heuristic capacity factors.
 
 ## Features
 
-- **Multi-Configuration Analysis**: Returns all 3 viable flowsheet options with complete sizing
-- **Water Chemistry Intelligence**: Automatic flowsheet selection based on hardness distribution
-- **Na+ Competition Modeling**: Sophisticated selectivity models for real-world performance
-- **Economic Optimization**: WaterTAP-based CAPEX/OPEX/LCOW calculations (see WATERTAP_COSTING_GAPS.md for limitations)
-- **MCAS Integration**: Seamless compatibility with RO design tools
-- **PhreeqPy Integration**: PHREEQC-based equilibrium calculations for accurate predictions
+- **SAC-Only Configuration**: Focused on single-vessel SAC systems for RO pretreatment
+- **Direct PHREEQC Engine**: Uses PHREEQC TRANSPORT for accurate breakthrough predictions
+- **Resolution-Independent**: PHREEQC determines actual operating capacity and competition effects
+- **Target Hardness Breakthrough**: Dynamic simulation until target effluent quality is reached
+- **No Mock Data**: All results come from actual PHREEQC calculations
+- **FastMCP Framework**: Built on FastMCP for high-performance async operations
 
 ## Tools
 
-### optimize_ix_configuration
-Generates all three flowsheet alternatives with:
-- Vessel sizing and counts (service + standby)
-- Resin volumes and bed depths
-- Degasser specifications
-- Complete economic analysis
-- Na+ competition factors
+### configure_sac_ix
+Performs hydraulic sizing for SAC vessels with:
+- Service flow rate: 16 BV/hr design basis
+- Linear velocity: 25 m/hr maximum
+- Minimum bed depth: 0.75 m
+- N+1 redundancy (1 service + 1 standby)
+- Shipping container constraint: 2.4 m max diameter
+- Returns bed volume for direct use in simulation
 
-### simulate_ix_system
-Performs detailed breakthrough simulation using **papermill notebook execution** for process isolation:
-- Executes in subprocess to prevent WaterTAP/PhreeqPy conflicts with MCP server
-- Service cycle runtime predictions
-- Regenerant consumption calculations
-- Water quality progression through treatment
-- Breakthrough curve generation
-- Waste volume estimation
+### simulate_sac_ix
+Performs Direct PHREEQC simulation with:
+- Uses bed volume directly from configuration
+- PHREEQC TRANSPORT for breakthrough curves
+- Dynamic breakthrough detection based on target hardness
+- Real capacity factors from PHREEQC (no heuristics)
+- Effluent hardness monitoring (Ca × 2.5 + Mg × 4.1 as CaCO3)
+- Automatic simulation extension if breakthrough not found
+- PNG breakthrough curve generation
 
-**Note**: Notebook execution is REQUIRED (not optional) to ensure process isolation
+## Design Philosophy
 
-## Flowsheet Options
-
-1. **H-WAC → Degasser → Na-WAC**: For waters with >90% temporary hardness
-2. **SAC → Na-WAC → Degasser**: For waters with significant permanent hardness  
-3. **Na-WAC → Degasser**: For simple water chemistry with low hardness
+- **Hydraulic Sizing**: Configuration tool handles vessel geometry only
+- **Chemistry in PHREEQC**: All ion exchange chemistry, selectivity, and competition handled by PHREEQC
+- **No Heuristics**: No capacity derating factors or empirical corrections
+- **Target-Based Operation**: Simulation continues until effluent exceeds target hardness
 
 ## Installation
 
@@ -84,80 +85,88 @@ python server.py
 
 ```json
 {
-  "water_analysis": {
-    "flow_m3_hr": 100,
-    "temperature_celsius": 25,
-    "pressure_bar": 1.0,
-    "pH": 7.5,
-    "ion_concentrations_mg_L": {
-      "Na_+": 200,
-      "Ca_2+": 100,
-      "Mg_2+": 40,
-      "HCO3_-": 250,
-      "Cl_-": 350,
-      "SO4_2-": 150
-    }
-  },
-  "design_criteria": {
-    "min_runtime_hours": 8,
-    "max_vessels_per_stage": 3
+  "configuration_input": {
+    "water_analysis": {
+      "flow_m3_hr": 100,
+      "ca_mg_l": 80.06,
+      "mg_mg_l": 24.29,
+      "na_mg_l": 838.9,
+      "hco3_mg_l": 121.95,
+      "pH": 7.8,
+      "cl_mg_l": 1435
+    },
+    "target_hardness_mg_l_caco3": 5.0
   }
 }
 ```
 
-### Example Response Structure
+### Example Configuration Response
 
 ```json
 {
   "status": "success",
-  "configurations": [
-    {
-      "flowsheet_type": "sac_na_wac_degasser",
-      "economics": {
-        "capital_cost_usd": 2720792,
-        "annual_opex_usd": 780759,
-        "cost_per_m3": 1.50
-      },
-      "ix_vessels": {
-        "SAC": {
-          "service_vessels": 2,
-          "standby_vessels": 1,
-          "diameter_m": 3.0,
-          "height_m": 3.5,
-          "resin_volume_m3": 18.85
-        }
-      }
+  "configuration": {
+    "vessels": {
+      "service": 1,
+      "standby": 1,
+      "total": 2
+    },
+    "vessel_geometry": {
+      "diameter_m": 2.4,
+      "bed_depth_m": 2.21,
+      "total_height_m": 4.42,
+      "bed_volume_L": 10000
+    },
+    "hydraulic_parameters": {
+      "service_flow_m3_hr": 100,
+      "linear_velocity_m_hr": 22.1,
+      "bed_volumes_per_hour": 10.0
     }
-  ]
+  }
 }
 ```
 
-## Water Chemistry Format (MCAS)
+### Example Simulation Request
 
-Use MCAS notation for all ions:
-- Cations: `Na_+`, `Ca_2+`, `Mg_2+`, `K_+`, `H_+`, `NH4_+`, `Fe_2+`, `Fe_3+`
-- Anions: `Cl_-`, `SO4_2-`, `HCO3_-`, `CO3_2-`, `NO3_-`, `PO4_3-`, `F_-`, `OH_-`
-- Neutrals: `CO2`, `SiO2`, `B(OH)3`
+Pass the configuration response directly to the simulation tool:
+
+```json
+{
+  "configuration": { /* configuration response from above */ },
+  "water_analysis": { /* same water analysis */ },
+  "target_hardness_mg_l_caco3": 5.0,
+  "simulation_time_hours": 24
+}
+```
+
+### Example Simulation Response
+
+```json
+{
+  "status": "success",
+  "breakthrough_time_hours": 18.5,
+  "breakthrough_bed_volumes": 185,
+  "capacity_factor": 0.42,
+  "breakthrough_curve_path": "sac_breakthrough_20241228_143022.png",
+  "warnings": []
+}
+```
+
+## Water Chemistry Format
+
+Use simple mg/L notation for all ions:
+- Required: `ca_mg_l`, `mg_mg_l`, `na_mg_l`, `hco3_mg_l`, `pH`
+- Optional anions: `cl_mg_l` (auto-balanced if not provided), `so4_mg_l`, `co3_mg_l`, `no3_mg_l`
+- Optional cations: `k_mg_l`, `nh4_mg_l`, `fe2_mg_l`, `fe3_mg_l`
+- Optional neutrals: `co2_mg_l`, `sio2_mg_l`, `b_oh_3_mg_l`
 
 ## Integration with AI Agents
 
 This MCP server is designed to power process engineering AI agents by providing:
-- Standardized tool interfaces for IX system design
-- Comprehensive performance predictions
-- Economic optimization capabilities
-- Water chemistry expertise
-
-## Testing
-
-Run the test suite:
-```bash
-python -m pytest tests/
-```
-
-Run integration tests:
-```bash
-python tests/test_mcp_server_integration.py
-```
+- Standardized tool interfaces for SAC ion exchange design
+- Direct PHREEQC integration for accurate predictions
+- Resolution-independent breakthrough modeling
+- Simple JSON-based communication
 
 ## Contributing
 
@@ -180,7 +189,7 @@ For issues and questions:
 
 ## Acknowledgments
 
-- Built on the MCP (Model Context Protocol) framework
-- Uses PHREEQC for geochemical calculations
-- Incorporates WaterTAP property models
-- Economics based exclusively on WaterTAP costing functions
+- Built on the FastMCP framework for high-performance async operations
+- Uses PHREEQC TRANSPORT for ion exchange breakthrough modeling
+- Integrates WaterTAP property models for water chemistry
+- Direct PHREEQC integration pattern inspired by phreeqc-pse approaches
