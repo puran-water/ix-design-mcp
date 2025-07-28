@@ -11,7 +11,7 @@ This MCP server provides AI-powered tools for designing and simulating ion excha
 - **Multi-Configuration Analysis**: Returns all 3 viable flowsheet options with complete sizing
 - **Water Chemistry Intelligence**: Automatic flowsheet selection based on hardness distribution
 - **Na+ Competition Modeling**: Sophisticated selectivity models for real-world performance
-- **Economic Optimization**: Complete CAPEX/OPEX/LCOW calculations for each option
+- **Economic Optimization**: WaterTAP-based CAPEX/OPEX/LCOW calculations (see WATERTAP_COSTING_GAPS.md for limitations)
 - **MCAS Integration**: Seamless compatibility with RO design tools
 - **PhreeqPy Integration**: PHREEQC-based equilibrium calculations for accurate predictions
 
@@ -183,3 +183,4 @@ For issues and questions:
 - Built on the MCP (Model Context Protocol) framework
 - Uses PHREEQC for geochemical calculations
 - Incorporates WaterTAP property models
+- Economics based exclusively on WaterTAP costing functions

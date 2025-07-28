@@ -1,9 +1,10 @@
 """
 Ion Exchange Configuration Tool
 
-Performs hydraulic sizing and flowsheet selection for ion exchange systems
-with Na+ competition awareness. This tool focuses on hydraulic calculations
-and configuration, NOT simulation or regeneration analysis.
+Performs hydraulic sizing and flowsheet selection for ion exchange systems.
+This tool focuses ONLY on vessel sizing and hydraulic calculations.
+Economics, breakthrough predictions, and regeneration analysis are handled
+by the simulation tool.
 """
 
 import math
@@ -17,11 +18,34 @@ from .schemas import (
     DegasserConfiguration,
     MCASWaterComposition
 )
-from .ix_economics import calculate_ix_economics
+# Economics calculation moved to simulation tool
 
 logger = logging.getLogger(__name__)
 
 # Resin properties for hydraulic sizing
+# 
+# IMPORTANT: Freeboard Requirements and Resin Swelling Behavior
+# 
+# WAC (Weak Acid Cation) Resins:
+# - Swell significantly when converting from H+ form (regenerated) to Na+ form (exhausted)
+# - Gel-type WAC resins can swell up to 90% in volume
+# - Macroporous WAC resins swell up to 60% in volume
+# - Require 125% freeboard (vessel height = 2.25 × bed depth) to accommodate:
+#   a) Swelling during service cycle (H+ → Na+ conversion)
+#   b) Bed expansion during backwash (typically 50% expansion)
+#   c) Safety margin for operational variations
+# 
+# SAC (Strong Acid Cation) Resins:
+# - Behave opposite to WAC resins
+# - Are most swollen in H+ form (regenerated state)
+# - Contract when loading with Na+, Ca2+, Mg2+ during service
+# - Require 100% freeboard (vessel height = 2.0 × bed depth) to accommodate:
+#   a) Bed expansion during backwash (typically 50% expansion)
+#   b) Less swelling concern during service cycle
+# 
+# The freeboard_percent value represents freeboard height as a percentage of bed depth
+# Example: 125% freeboard means freeboard height = 1.25 × bed depth
+#
 RESIN_PROPERTIES = {
     "SAC": {
         "exchange_capacity_eq_L": 2.0,  # eq/L of resin
@@ -29,7 +53,7 @@ RESIN_PROPERTIES = {
         "max_bed_volume_per_hour": 16.0,
         "max_linear_velocity_m_hr": 25.0,
         "min_bed_depth_m": 0.75,
-        "freeboard_percent": 125.0,
+        "freeboard_percent": 100.0,  # SAC resins are most swollen in H+ form, less swelling concern
         "particle_size_mm": 0.6
     },
     "WAC_H": {
@@ -226,7 +250,9 @@ def size_ix_vessel(
     Size ion exchange vessels based on hydraulic constraints.
     
     Uses 16 BV/hr service flow rate and 25 m/hr linear velocity.
-    Includes N+1 redundancy and 125% freeboard.
+    Includes N+1 redundancy and appropriate freeboard:
+    - WAC resins: 125% freeboard to accommodate H+ to Na+ swelling
+    - SAC resins: 100% freeboard (less swelling concern)
     """
     resin_props = RESIN_PROPERTIES[resin_type]
     
@@ -270,10 +296,14 @@ def size_ix_vessel(
         required_resin_volume_m3 = resin_volume_per_vessel * n_service
     
     # Calculate freeboard
-    freeboard_m = bed_depth * (resin_props["freeboard_percent"] / 100 - 1)
+    # Freeboard percent represents the freeboard height as a percentage of bed depth
+    # e.g., 125% means freeboard = 1.25 × bed depth (total vessel height = 2.25 × bed depth)
+    # This is critical for WAC resins which swell significantly when converting from H+ to Na+ form
+    freeboard_m = bed_depth * (resin_props["freeboard_percent"] / 100)
     
     # Total vessel height
-    vessel_height = bed_depth + freeboard_m + 0.5  # 0.5m for distributors
+    # Include space for bottom distributor/support (0.3m) and top distributor/nozzles (0.2m)
+    vessel_height = bed_depth + freeboard_m + 0.3 + 0.2  # Bottom + top distribution systems
     
     # Add standby vessel (N+1 redundancy)
     n_standby = 1
@@ -334,7 +364,7 @@ def size_degasser(flow_m3_hr: float) -> DegasserConfiguration:
     )
 
 
-def optimize_ix_configuration_single(input_data: IXConfigurationInput, flowsheet_type: str, flowsheet_desc: str, stages: List[str], characteristics: Dict[str, Any]) -> IXConfigurationOutput:
+def optimize_ix_configuration_single(input_data: IXConfigurationInput, flowsheet_type: str, flowsheet_desc: str, stages: List[str]) -> IXConfigurationOutput:
     """
     Generate configuration for a single flowsheet option.
     Internal function used by optimize_ix_configuration.
@@ -342,26 +372,11 @@ def optimize_ix_configuration_single(input_data: IXConfigurationInput, flowsheet
     water = input_data.water_analysis
     max_diameter = input_data.max_vessel_diameter_m
     
-    # Calculate Na+ competition factor
+    # Calculate Na+ competition factor (used internally for sizing)
     competition_factor = calculate_na_competition_factor(water)
-    
-    # Calculate effective resin capacities with Na+ competition
-    effective_capacity = {}
-    for resin_type, props in RESIN_PROPERTIES.items():
-        base_capacity = props["exchange_capacity_eq_L"] * props["operating_capacity_factor"]
-        
-        if resin_type == "SAC":
-            # SAC is most affected by Na+ competition
-            effective_capacity[resin_type] = base_capacity * competition_factor
-        elif resin_type.startswith("WAC"):
-            # WAC is less affected, but still some impact
-            effective_capacity[resin_type] = base_capacity * (0.7 + 0.3 * competition_factor)
-        else:
-            effective_capacity[resin_type] = base_capacity
     
     # Size vessels for each stage
     ix_vessels = {}
-    warnings = []
     
     # Get water chemistry for sizing
     total_hardness = water.get_total_hardness_mg_L_CaCO3()
@@ -402,12 +417,7 @@ def optimize_ix_configuration_single(input_data: IXConfigurationInput, flowsheet
             
             ix_vessels[stage] = vessel_config
             
-            # Check if vessels are getting too large
-            if vessel_config.diameter_m >= max_diameter * 0.95:
-                warnings.append(
-                    f"{stage} vessels near maximum diameter ({vessel_config.diameter_m:.1f}m). "
-                    f"Consider multiple trains for larger flows."
-                )
+            # Vessel sizing complete
     
     # Size degasser
     degasser_config = size_degasser(water.flow_m3_hr)
@@ -427,226 +437,38 @@ def optimize_ix_configuration_single(input_data: IXConfigurationInput, flowsheet
         "feed_flow_m3_hr": water.flow_m3_hr  # Add flow for economics calculation
     }
     
-    # Add Na+ competition warning if significant
-    if competition_factor < 0.5:
-        warnings.append(
-            f"High Na+ competition detected (factor={competition_factor:.2f}). "
-            f"Consider pre-treatment for Na+ reduction or adjust regeneration levels."
-        )
+    # Na+ competition factor is used internally for sizing calculations
     
     # Create configuration object
-    config = IXConfigurationOutput(
+    return IXConfigurationOutput(
         flowsheet_type=flowsheet_type,
         flowsheet_description=flowsheet_desc,
-        na_competition_factor=round(competition_factor, 3),
-        effective_capacity=effective_capacity,
         ix_vessels=ix_vessels,
         degasser=degasser_config,
-        hydraulics=hydraulics,
-        warnings=warnings if warnings else None,
-        characteristics=characteristics,
-        economics=None  # Will be calculated next
+        hydraulics=hydraulics
     )
-    
-    # Calculate economics
-    try:
-        economics = calculate_ix_economics(config)
-        config.economics = economics
-    except Exception as e:
-        logger.warning(f"Economics calculation failed: {str(e)}")
-        # Provide simplified economics if detailed calculation fails
-        config.economics = {
-            "capital_cost_usd": len(ix_vessels) * 200000,  # Rough estimate
-            "annual_opex_usd": len(ix_vessels) * 50000,
-            "cost_per_m3": 0.5,
-            "note": "Simplified estimate - detailed calculation failed"
-        }
-    
-    return config
+
+
+# Legacy single configuration function removed - use optimize_ix_configuration (multi-config) instead
 
 
 def optimize_ix_configuration(input_data: IXConfigurationInput) -> IXMultiConfigurationOutput:
     """
-    Optimize ion exchange system configuration for RO pretreatment.
+    Generate vessel sizing for ALL three ion exchange flowsheet options.
     
-    Performs hydraulic sizing and flowsheet selection based on water chemistry,
-    accounting for Na+ competition effects on resin capacity. Designed for
-    industrial wastewater ZLD applications.
+    This tool performs ONLY hydraulic sizing calculations:
+    - Vessel dimensions based on flow rates and hydraulic constraints
+    - Number of vessels needed (service + standby)
+    - Resin volumes based on bed depths
+    - Degasser tower sizing
     
-    Args:
-        input_data: IXConfigurationInput containing:
-            - water_analysis: MCASWaterComposition with feed water quality
-            - max_vessel_diameter_m: Maximum vessel diameter (default 2.4m)
-            - target_treated_quality: Optional treatment targets
+    Does NOT calculate:
+    - Economics (CAPEX/OPEX) - handled by simulation tool
+    - Breakthrough times - requires PHREEQC simulation
+    - Regenerant consumption - requires mass balance simulation
+    - Operating capacity - requires competitive ion exchange modeling
     
-    Water Composition Requirements:
-        The water_analysis must include ion concentrations in MCAS format.
-        
-        Accepted ions (use exact notation):
-        - Cations: Na_+, Ca_2+, Mg_2+, K_+, H_+, NH4_+, Fe_2+, Fe_3+
-        - Anions: Cl_-, SO4_2-, HCO3_-, CO3_2-, NO3_-, PO4_3-, F_-, OH_-
-        - Neutrals: CO2, H2O, SiO2, B(OH)3
-        
-        Example water composition:
-        {
-            "flow_m3_hr": 100.0,
-            "temperature_celsius": 25.0,
-            "pressure_bar": 4.0,
-            "pH": 7.8,
-            "ion_concentrations_mg_L": {
-                "Na_+": 500.0,      # Sodium (affects IX capacity)
-                "Ca_2+": 120.0,     # Calcium (hardness)
-                "Mg_2+": 48.0,      # Magnesium (hardness)
-                "K_+": 10.0,        # Potassium
-                "Cl_-": 800.0,      # Chloride
-                "SO4_2-": 240.0,    # Sulfate
-                "HCO3_-": 180.0,    # Bicarbonate (alkalinity)
-                "NO3_-": 5.0,       # Nitrate
-                "SiO2": 25.0        # Silica (passes through IX)
-            }
-        }
-        
-        Note: Non-standard ions will generate warnings but won't cause errors.
-        They will be ignored for IX calculations but passed through for transparency.
-    
-    Returns:
-        IXConfigurationOutput containing:
-        - flowsheet_type: Selected configuration (e.g., "sac_na_wac_degasser")
-        - flowsheet_description: Human-readable description
-        - na_competition_factor: Capacity reduction due to Na+ (0-1)
-        - effective_capacity: Adjusted resin capacities
-        - ix_vessels: Vessel configurations for each stage
-        - degasser: CO2 stripping tower configuration
-        - hydraulics: Flow and velocity parameters
-        - warnings: Any operational concerns
-    
-    Design Basis:
-        - Service flow: 16 BV/hr (bed volumes per hour)
-        - Linear velocity: 25 m/hr maximum
-        - Redundancy: N+1 vessels (one standby)
-        - Freeboard: 125% of bed depth
-        - Degasser: 40 m/hr loading, 45:1 air/water ratio
-    
-    Flowsheet Selection Logic:
-        1. H-WAC → Degasser → Na-WAC: For >90% temporary hardness
-        2. SAC → Na-WAC → Degasser: For significant permanent hardness
-        3. Na-WAC → Degasser: For simple water chemistry
-    
-    Na+ Competition Model:
-        - Uses selectivity coefficients: K_Ca/Na ≈ 5.0, K_Mg/Na ≈ 3.0
-        - Competition factor = 1/(1 + Na_hardness_ratio/avg_selectivity)
-        - Minimum capacity retained: 30% (even at very high Na+)
-    """
-    water = input_data.water_analysis
-    max_diameter = input_data.max_vessel_diameter_m
-    
-    # Calculate Na+ competition factor
-    competition_factor = calculate_na_competition_factor(water)
-    logger.info(f"Na+ competition factor: {competition_factor:.2f}")
-    
-    # Select flowsheet based on water chemistry
-    flowsheet_type, flowsheet_desc, stages = select_flowsheet(water)
-    logger.info(f"Selected flowsheet: {flowsheet_type}")
-    
-    # Calculate effective resin capacities with Na+ competition
-    effective_capacity = {}
-    for resin_type, props in RESIN_PROPERTIES.items():
-        base_capacity = props["exchange_capacity_eq_L"] * props["operating_capacity_factor"]
-        if resin_type == "SAC":
-            # SAC is most affected by Na+ competition
-            effective_capacity[resin_type] = base_capacity * competition_factor
-        else:
-            # WAC less affected but still some impact
-            effective_capacity[resin_type] = base_capacity * (0.5 + 0.5 * competition_factor)
-    
-    # Size vessels for each stage
-    ix_vessels = {}
-    flow_m3_hr = water.flow_m3_hr
-    
-    # Get hardness values
-    total_hardness = water.get_total_hardness_mg_L_CaCO3()
-    alkalinity = water.get_alkalinity_mg_L_CaCO3()
-    
-    # Convert to meq/L for sizing calculations
-    total_hardness_meq_L = total_hardness / 50.045
-    alkalinity_meq_L = alkalinity / 50.045
-    
-    for stage in stages:
-        if stage == "SAC":
-            # SAC removes all cations (total hardness)
-            hardness_to_remove = total_hardness_meq_L
-            vessel_config = size_ix_vessel(
-                flow_m3_hr, "SAC", hardness_to_remove, 
-                competition_factor, max_diameter
-            )
-            ix_vessels["SAC"] = vessel_config
-            
-        elif stage == "H-WAC":
-            # H-WAC removes temporary hardness (alkalinity)
-            hardness_to_remove = min(total_hardness_meq_L, alkalinity_meq_L)
-            vessel_config = size_ix_vessel(
-                flow_m3_hr, "WAC_H", hardness_to_remove,
-                competition_factor, max_diameter
-            )
-            ix_vessels["H-WAC"] = vessel_config
-            
-        elif stage == "Na-WAC":
-            # Na-WAC for polishing or alkalinity adjustment
-            if "SAC" in stages:
-                # After SAC, mainly for alkalinity adjustment
-                hardness_to_remove = 0.2  # Minimal hardness leakage
-            else:
-                # Primary softening
-                hardness_to_remove = min(total_hardness_meq_L, alkalinity_meq_L)
-            
-            vessel_config = size_ix_vessel(
-                flow_m3_hr, "WAC_Na", hardness_to_remove,
-                competition_factor, max_diameter
-            )
-            ix_vessels["Na-WAC"] = vessel_config
-    
-    # Size degasser
-    degasser_config = size_degasser(flow_m3_hr)
-    
-    # Calculate hydraulic parameters
-    hydraulics = {
-        "bed_volumes_per_hour": RESIN_PROPERTIES["SAC"]["max_bed_volume_per_hour"],
-        "linear_velocity_m_hr": RESIN_PROPERTIES["SAC"]["max_linear_velocity_m_hr"],
-        "total_resin_volume_m3": sum(v.resin_volume_m3 for v in ix_vessels.values()),
-        "total_vessels": sum(v.number_service + v.number_standby for v in ix_vessels.values())
-    }
-    
-    # Generate warnings
-    warnings = []
-    if competition_factor < 0.5:
-        warnings.append(
-            f"High Na+ levels detected. Resin capacity reduced to {competition_factor*100:.0f}% "
-            "of nominal. Consider more frequent regenerations."
-        )
-    
-    if water.get_tds_mg_L() > 10000:
-        warnings.append(
-            "High TDS water (>10,000 mg/L). Consider RO treatment instead of IX for better economics."
-        )
-    
-    return IXConfigurationOutput(
-        flowsheet_type=flowsheet_type,
-        flowsheet_description=flowsheet_desc,
-        na_competition_factor=round(competition_factor, 3),
-        effective_capacity=effective_capacity,
-        ix_vessels=ix_vessels,
-        degasser=degasser_config,
-        hydraulics=hydraulics,
-        warnings=warnings if warnings else None
-    )
-
-
-def optimize_ix_configuration_all(input_data: IXConfigurationInput) -> IXMultiConfigurationOutput:
-    """
-    Generate ALL ion exchange system configurations (like RO server).
-    
-    Returns all three flowsheet options with sizing and characteristics,
-    allowing the engineer to select based on their priorities.
+    Returns all three flowsheet options with hydraulic sizing only.
     """
     water = input_data.water_analysis
     
@@ -656,10 +478,6 @@ def optimize_ix_configuration_all(input_data: IXConfigurationInput) -> IXMultiCo
     temporary_hardness = min(total_hardness, alkalinity)
     permanent_hardness = max(0, total_hardness - alkalinity)
     
-    # Calculate Na+ competition factor once for all configurations
-    competition_factor = calculate_na_competition_factor(water)
-    logger.info(f"Na+ competition factor: {competition_factor:.2f}")
-    
     # Prepare water chemistry analysis
     water_chemistry_analysis = {
         "total_hardness_mg_L_CaCO3": round(total_hardness, 1),
@@ -667,8 +485,7 @@ def optimize_ix_configuration_all(input_data: IXConfigurationInput) -> IXMultiCo
         "temporary_hardness_mg_L_CaCO3": round(temporary_hardness, 1),
         "permanent_hardness_mg_L_CaCO3": round(permanent_hardness, 1),
         "temporary_hardness_fraction": round(temporary_hardness / total_hardness, 2) if total_hardness > 0 else 0,
-        "na_concentration_mg_L": round(water.ion_concentrations_mg_L.get("Na_+", 0), 1),
-        "na_competition_factor": round(competition_factor, 3)
+        "na_concentration_mg_L": round(water.ion_concentrations_mg_L.get("Na_+", 0), 1)
     }
     
     # Get all flowsheet configurations
@@ -682,8 +499,7 @@ def optimize_ix_configuration_all(input_data: IXConfigurationInput) -> IXMultiCo
                 input_data=input_data,
                 flowsheet_type=flowsheet_type,
                 flowsheet_desc=flowsheet_desc,
-                stages=stages,
-                characteristics=characteristics
+                stages=stages
             )
             configurations.append(config)
             logger.info(f"Generated configuration for {flowsheet_type}")
@@ -710,12 +526,6 @@ def optimize_ix_configuration_all(input_data: IXConfigurationInput) -> IXMultiCo
         summary["recommended_flowsheet"] = "na_wac_degasser"
         summary["recommendation_reason"] = "Simple water chemistry with moderate hardness"
     
-    # Add Na+ competition warning to summary if needed
-    if competition_factor < 0.5:
-        summary["warning"] = (
-            f"High Na+ competition detected (factor={competition_factor:.2f}). "
-            "All configurations will have reduced capacity. Consider Na+ pre-treatment."
-        )
     
     return IXMultiConfigurationOutput(
         status="success",

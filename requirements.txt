@@ -1,24 +1,25 @@
-# Core MCP Framework
-fastmcp>=0.1.0
-
-# Water Chemistry and IX Modeling
-phreeqpython>=1.5.0
-
-# Data Validation
-pydantic>=2.0.0
-
-# Notebook Execution (REQUIRED for process isolation)
-papermill>=2.4.0
-
-# Scientific Computing
+# Core dependencies
+pyomo>=6.4.0
+idaes-pse>=2.0.0
+watertap>=0.7.0
 numpy>=1.21.0
 pandas>=1.3.0
+matplotlib>=3.4.0
+scipy>=1.7.0
+
+# PHREEQC interface
+phreeqpython>=1.5.0
+
+# Notebook execution
+jupyter>=1.0.0
+papermill>=2.4.0
+nbconvert>=6.0.0
 
 # Testing
 pytest>=7.0.0
-pytest-asyncio>=0.21.0
+pytest-cov>=3.0.0
+pytest-timeout>=2.1.0
 
-# Development Tools (optional)
-black>=22.0.0
-flake8>=4.0.0
-mypy>=0.990
+# Utilities
+pyyaml>=6.0
+psutil>=5.9.0
