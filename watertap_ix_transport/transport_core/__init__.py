@@ -9,6 +9,19 @@ from .phreeqc_transport_engine import PhreeqcTransportEngine, TransportParameter
 # Only import modules that exist
 __all__ = ["PhreeqcTransportEngine", "TransportParameters"]
 
+# Import PHREEQC engines
+try:
+    from .direct_phreeqc_engine import DirectPhreeqcEngine
+    __all__.append("DirectPhreeqcEngine")
+except ImportError:
+    pass
+
+try:
+    from .optimized_phreeqc_engine import OptimizedPhreeqcEngine
+    __all__.append("OptimizedPhreeqcEngine")
+except ImportError:
+    pass
+
 try:
     from .phreeqpy_engine import PhreeqPyEngine, IXColumn
     __all__.extend(["PhreeqPyEngine", "IXColumn"])

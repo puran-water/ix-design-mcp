@@ -145,6 +145,8 @@ tools/ix_simulation_watertap.py
 
 # Keep only essential directories
 watertap_ix_transport/
+!watertap_ix_transport/transport_core/optimized_phreeqc_engine.py
+!watertap_ix_transport/transport_core/__init__.py
 utils/
 config/
 databases/

@@ -22,7 +22,13 @@ project_root = Path(__file__).parent.parent
 if str(project_root) not in sys.path:
     sys.path.insert(0, str(project_root))
 
-# Import Direct PHREEQC engine
+# Import PHREEQC engines - prefer optimized engine for performance
+try:
+    from watertap_ix_transport.transport_core.optimized_phreeqc_engine import OptimizedPhreeqcEngine
+    OPTIMIZED_AVAILABLE = True
+except ImportError:
+    OPTIMIZED_AVAILABLE = False
+    
 from watertap_ix_transport.transport_core.direct_phreeqc_engine import DirectPhreeqcEngine
 
 # Import schemas from sac_configuration
@@ -64,16 +70,34 @@ class IXDirectPhreeqcSimulation:
     
     def __init__(self):
         """Initialize simulation."""
-        # Get PHREEQC executable from centralized config
-        phreeqc_exe = CONFIG.get_phreeqc_exe()
+        # Try optimized engine first for better performance
+        engine_initialized = False
+        if OPTIMIZED_AVAILABLE:
+            try:
+                # Get PHREEQC path from config
+                phreeqc_exe = CONFIG.get_phreeqc_exe()
+                self.engine = OptimizedPhreeqcEngine(
+                    phreeqc_path=str(phreeqc_exe),
+                    cache_size=256,  # Cache more results
+                    max_workers=4     # Parallel execution
+                )
+                logger.info("Using OptimizedPhreeqcEngine with caching and batch processing")
+                engine_initialized = True
+            except Exception as e:
+                logger.warning(f"Failed to initialize OptimizedPhreeqcEngine: {e}")
         
-        try:
-            self.engine = DirectPhreeqcEngine(phreeqc_path=str(phreeqc_exe), keep_temp_files=False)
-            logger.info(f"Using PHREEQC at: {phreeqc_exe}")
-        except (FileNotFoundError, RuntimeError) as e:
-            logger.warning(f"Failed to initialize PHREEQC at {phreeqc_exe}: {e}")
-            # Try without specifying path (will search system)
-            self.engine = DirectPhreeqcEngine(keep_temp_files=False)
+        # Fall back to DirectPhreeqcEngine
+        if not engine_initialized:
+            # Get PHREEQC executable from centralized config
+            phreeqc_exe = CONFIG.get_phreeqc_exe()
+            
+            try:
+                self.engine = DirectPhreeqcEngine(phreeqc_path=str(phreeqc_exe), keep_temp_files=False)
+                logger.info(f"Using DirectPhreeqcEngine at: {phreeqc_exe}")
+            except (FileNotFoundError, RuntimeError) as e:
+                logger.warning(f"Failed to initialize PHREEQC at {phreeqc_exe}: {e}")
+                # Try without specifying path (will search system)
+                self.engine = DirectPhreeqcEngine(keep_temp_files=False)
             
     def run_sac_simulation(
         self,
