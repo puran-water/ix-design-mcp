@@ -1,0 +1,1 @@
+# Tests for IX Design MCP Server

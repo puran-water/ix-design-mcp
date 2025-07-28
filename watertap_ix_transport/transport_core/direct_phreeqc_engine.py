@@ -11,6 +11,7 @@ import numpy as np
 from typing import Dict, List, Optional, Tuple
 import logging
 from pathlib import Path
+import functools
 from ..species_alias import phreeqc_to_pyomo, pyomo_to_phreeqc
 
 logger = logging.getLogger(__name__)
@@ -34,6 +35,7 @@ class DirectPhreeqcEngine:
             raise RuntimeError("PHREEQC executable not found. Please install PHREEQC or provide path.")
         
         self.keep_temp_files = keep_temp_files
+        self.temp_dirs = []  # Track temporary directories for cleanup
         logger.info(f"Using PHREEQC executable: {self.phreeqc_exe}")
         
         # Database paths
@@ -71,7 +73,8 @@ class DirectPhreeqcEngine:
                                   capture_output=True, text=True)
             if result.returncode == 0:
                 return result.stdout.strip()
-        except:
+        except (subprocess.SubprocessError, FileNotFoundError) as e:
+            logger.debug(f"Failed to find phreeqc via system path: {e}")
             pass
         
         return None
@@ -95,6 +98,28 @@ class DirectPhreeqcEngine:
         # Default to executable directory
         return os.path.dirname(self.phreeqc_exe)
     
+    def __enter__(self):
+        """Context manager entry - returns self for use in 'with' statements."""
+        return self
+    
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        """Context manager exit - ensures cleanup of all temporary directories."""
+        self.cleanup()
+        # Don't suppress exceptions
+        return False
+    
+    def cleanup(self):
+        """Clean up all temporary directories created during this session."""
+        import shutil
+        for temp_dir in self.temp_dirs:
+            try:
+                if os.path.exists(temp_dir):
+                    shutil.rmtree(temp_dir)
+                    logger.debug(f"Cleaned up temp directory: {temp_dir}")
+            except (OSError, PermissionError) as e:
+                logger.warning(f"Failed to clean up temp directory {temp_dir}: {e}")
+        self.temp_dirs.clear()
+    
     def run_phreeqc(self, input_string: str, database: Optional[str] = None) -> Tuple[str, str]:
         """
         Run PHREEQC with given input string
@@ -112,6 +137,8 @@ class DirectPhreeqcEngine:
         
         # Create temporary directory and files
         temp_dir = tempfile.mkdtemp(prefix='phreeqc_')
+        # Track for cleanup
+        self.temp_dirs.append(temp_dir)
         
         # Write input file with UTF-8 encoding
         input_path = os.path.join(temp_dir, 'input.pqi')
@@ -195,11 +222,16 @@ class DirectPhreeqcEngine:
         finally:
             # Clean up temporary files (unless debugging)
             if not self.keep_temp_files:
+                # Remove from tracking list and clean up immediately
+                if temp_dir in self.temp_dirs:
+                    self.temp_dirs.remove(temp_dir)
                 import shutil
                 try:
                     shutil.rmtree(temp_dir)
-                except:
-                    pass
+                except (OSError, PermissionError) as e:
+                    logger.debug(f"Failed to clean up temp directory {temp_dir}: {e}")
+                    # Re-add to list for later cleanup attempt
+                    self.temp_dirs.append(temp_dir)
             else:
                 logger.info(f"Temp files kept in: {temp_dir}")
     
@@ -373,3 +405,32 @@ class DirectPhreeqcEngine:
         }
         
         return results
+
+
+# Singleton pattern for PHREEQC engine
+@functools.lru_cache(maxsize=1)
+def get_phreeqc_engine(keep_temp_files: bool = False) -> DirectPhreeqcEngine:
+    """
+    Get singleton PHREEQC engine instance.
+    
+    This ensures only one PHREEQC engine is created per process,
+    preventing multiple DLL/executable instances and reducing resource usage.
+    
+    Args:
+        keep_temp_files: If True, don't delete temporary files (for debugging)
+        
+    Returns:
+        Singleton DirectPhreeqcEngine instance
+    """
+    # Try to get PHREEQC path from centralized config
+    try:
+        from watertap_ix_transport.transport_core.tools.core_config import CONFIG
+        phreeqc_path = str(CONFIG.get_phreeqc_exe())
+    except ImportError:
+        # Fallback if core_config not available
+        phreeqc_path = None
+    
+    return DirectPhreeqcEngine(
+        phreeqc_path=phreeqc_path,
+        keep_temp_files=keep_temp_files
+    )

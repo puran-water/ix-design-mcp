@@ -54,7 +54,8 @@ class IXDirectPhreeqcSimulation:
                 self.engine = DirectPhreeqcEngine(phreeqc_path=path, keep_temp_files=False)
                 logger.info(f"Using PHREEQC at: {path}")
                 break
-            except:
+            except (FileNotFoundError, RuntimeError) as e:
+                logger.debug(f"Failed to initialize PHREEQC at {path}: {e}")
                 continue
                 
         if not self.engine:

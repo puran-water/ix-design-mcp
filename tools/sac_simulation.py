@@ -32,6 +32,9 @@ from .sac_configuration import (
     SACConfigurationOutput
 )
 
+# Import centralized configuration
+from .core_config import CONFIG
+
 logger = logging.getLogger(__name__)
 
 
@@ -61,24 +64,15 @@ class IXDirectPhreeqcSimulation:
     
     def __init__(self):
         """Initialize simulation."""
-        # Find PHREEQC executable
-        phreeqc_paths = [
-            r"C:\Program Files\USGS\phreeqc-3.8.6-17100-x64\bin\phreeqc.bat",
-            r"C:\Program Files\USGS\phreeqc-3.8.6-17096-x64\bin\phreeqc.bat",
-            r"C:\Program Files\USGS\phreeqc\bin\phreeqc.bat",
-            r"C:\phreeqc\bin\phreeqc.bat"
-        ]
+        # Get PHREEQC executable from centralized config
+        phreeqc_exe = CONFIG.get_phreeqc_exe()
         
-        self.engine = None
-        for path in phreeqc_paths:
-            try:
-                self.engine = DirectPhreeqcEngine(phreeqc_path=path, keep_temp_files=False)
-                logger.info(f"Using PHREEQC at: {path}")
-                break
-            except:
-                continue
-                
-        if not self.engine:
+        try:
+            self.engine = DirectPhreeqcEngine(phreeqc_path=str(phreeqc_exe), keep_temp_files=False)
+            logger.info(f"Using PHREEQC at: {phreeqc_exe}")
+        except (FileNotFoundError, RuntimeError) as e:
+            logger.warning(f"Failed to initialize PHREEQC at {phreeqc_exe}: {e}")
+            # Try without specifying path (will search system)
             self.engine = DirectPhreeqcEngine(keep_temp_files=False)
             
     def run_sac_simulation(
@@ -105,7 +99,7 @@ class IXDirectPhreeqcSimulation:
         bed_volume_L = vessel_config['bed_volume_L']
         bed_depth_m = vessel_config['bed_depth_m']
         diameter_m = vessel_config['diameter_m']
-        porosity = vessel_config.get('bed_porosity', 0.4)
+        porosity = vessel_config.get('bed_porosity', CONFIG.BED_POROSITY)
         
         # Calculate volumes
         pore_volume_L = bed_volume_L * porosity
@@ -115,7 +109,7 @@ class IXDirectPhreeqcSimulation:
         cell_length_m = bed_depth_m / cells
         
         # CORRECTED: Resin capacity is per liter of BED VOLUME
-        resin_capacity_eq_L = vessel_config.get('resin_capacity_eq_L', 2.0)  # eq/L bed
+        resin_capacity_eq_L = vessel_config.get('resin_capacity_eq_L', CONFIG.RESIN_CAPACITY_EQ_L)  # eq/L bed
         total_capacity_eq = resin_capacity_eq_L * bed_volume_L  # Convert L to m³
         exchange_per_kg_water = total_capacity_eq / cells / water_per_cell_kg
         
@@ -130,14 +124,19 @@ class IXDirectPhreeqcSimulation:
         nh4_mg_L = water.nh4_mg_l
         
         # Calculate charge balance for Cl if needed
-        cation_charge = (ca_mg_L/20.04 + mg_mg_L/12.15 + na_mg_L/23.0 + 
-                        k_mg_L/39.1 + nh4_mg_L/18.04)  # meq/L
-        anion_charge = (cl_mg_L/35.45 + hco3_mg_L/61.02 + so4_mg_L/48.03)  # meq/L
+        cation_charge = (ca_mg_L/CONFIG.CA_EQUIV_WEIGHT + 
+                        mg_mg_L/CONFIG.MG_EQUIV_WEIGHT + 
+                        na_mg_L/CONFIG.NA_EQUIV_WEIGHT + 
+                        k_mg_L/CONFIG.K_EQUIV_WEIGHT + 
+                        nh4_mg_L/CONFIG.NH4_EQUIV_WEIGHT)  # meq/L
+        anion_charge = (cl_mg_L/CONFIG.CL_EQUIV_WEIGHT + 
+                       hco3_mg_L/CONFIG.HCO3_EQUIV_WEIGHT + 
+                       so4_mg_L/CONFIG.SO4_EQUIV_WEIGHT)  # meq/L
         if abs(cation_charge - anion_charge) > 0.1:
             logger.warning(f"Charge imbalance: {cation_charge:.2f} vs {anion_charge:.2f} meq/L")
         
-        # Get database path
-        db_path = Path(r"C:\Program Files\USGS\phreeqc-3.8.6-17100-x64\database\phreeqc.dat")
+        # Get database path from centralized config
+        db_path = CONFIG.get_phreeqc_database()
         
         # Build PHREEQC input with all MCAS ions
         phreeqc_input = f"""DATABASE {db_path}
@@ -393,16 +392,16 @@ def simulate_sac_phreeqc(input_data: SACSimulationInput) -> SACSimulationOutput:
     diameter_m = vessel.diameter_m
     
     # Calculate porosity and resin parameters
-    porosity = 0.4
+    porosity = CONFIG.BED_POROSITY
     pore_volume_L = bed_volume_L * porosity
     
     # Calculate theoretical capacity for reference only
-    ca_meq_L = water.ca_mg_l / 20.04
-    mg_meq_L = water.mg_mg_l / 12.15
+    ca_meq_L = water.ca_mg_l / CONFIG.CA_EQUIV_WEIGHT
+    mg_meq_L = water.mg_mg_l / CONFIG.MG_EQUIV_WEIGHT
     hardness_meq_L = ca_meq_L + mg_meq_L
     
     # CORRECTED: Resin capacity is per liter of BED VOLUME, not resin volume
-    resin_capacity_eq_L = 2.0  # Standard SAC capacity per L of bed volume
+    resin_capacity_eq_L = CONFIG.RESIN_CAPACITY_EQ_L  # Standard SAC capacity per L of bed volume
     total_capacity_eq = resin_capacity_eq_L * bed_volume_L  # Total eq
     
     # Theoretical BV = total capacity / (hardness per BV)
@@ -443,7 +442,7 @@ def simulate_sac_phreeqc(input_data: SACSimulationInput) -> SACSimulationOutput:
             water=water,
             vessel_config=vessel_config_phreeqc,
             max_bv=max_bv,
-            cells=10
+            cells=CONFIG.DEFAULT_CELLS
         )
         
         # Find breakthrough based on target hardness
@@ -494,8 +493,8 @@ def simulate_sac_phreeqc(input_data: SACSimulationInput) -> SACSimulationOutput:
     
     # Calculate regenerant requirements
     hardness_removed_eq = hardness_meq_L * breakthrough_bv * bed_volume_L / 1000
-    # Regenerant based on bed volume (125 kg/m³ bed)
-    regenerant_kg = bed_volume_L / 1000 * 125  # 125 kg/m³ bed volume
+    # Regenerant based on bed volume (from config)
+    regenerant_kg = bed_volume_L / 1000 * CONFIG.REGENERANT_DOSE_KG_M3
     
     return SACSimulationOutput(
         status="success" if breakthrough_found else "warning",
@@ -511,7 +510,7 @@ def simulate_sac_phreeqc(input_data: SACSimulationInput) -> SACSimulationOutput:
             "bed_volume_L": bed_volume_L,
             "theoretical_bv": round(theoretical_bv, 1),
             "max_bv_simulated": max_bv,
-            "cells": 10,
+            "cells": CONFIG.DEFAULT_CELLS,
             "porosity": porosity,
             "hardness_removed_eq": round(hardness_removed_eq, 1),
             "regenerant_required_kg": round(regenerant_kg, 1),

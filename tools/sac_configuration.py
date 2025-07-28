@@ -12,16 +12,10 @@ import logging
 from typing import Dict, List, Optional, Any
 from pydantic import BaseModel, Field
 
-logger = logging.getLogger(__name__)
+# Import centralized configuration
+from .core_config import CONFIG
 
-# SAC design parameters - HYDRAULIC ONLY, NO CHEMISTRY
-SAC_DESIGN_PARAMETERS = {
-    "max_bed_volume_per_hour": 16.0,      # BV/hr service flow rate
-    "max_linear_velocity_m_hr": 25.0,     # m/hr linear velocity limit
-    "min_bed_depth_m": 0.75,              # Minimum bed depth
-    "freeboard_percent": 100.0,           # SAC resins need 100% freeboard
-    "max_vessel_diameter_m": 2.4          # Shipping container limit
-}
+logger = logging.getLogger(__name__)
 
 
 class SACWaterComposition(BaseModel):
@@ -61,19 +55,27 @@ class SACWaterComposition(BaseModel):
     def model_post_init(self, __context):
         """Auto-calculate Cl if not provided for charge balance"""
         if self.cl_mg_l is None:
-            # Calculate charge balance
+            # Calculate charge balance using centralized equivalent weights
             cation_meq = (
-                self.ca_mg_l/20.04 + self.mg_mg_l/12.15 + self.na_mg_l/23.0 +
-                self.k_mg_l/39.1 + self.nh4_mg_l/18.04 +
-                self.fe2_mg_l/27.92 + self.fe3_mg_l/18.62
+                self.ca_mg_l/CONFIG.CA_EQUIV_WEIGHT + 
+                self.mg_mg_l/CONFIG.MG_EQUIV_WEIGHT + 
+                self.na_mg_l/CONFIG.NA_EQUIV_WEIGHT +
+                self.k_mg_l/CONFIG.K_EQUIV_WEIGHT + 
+                self.nh4_mg_l/CONFIG.NH4_EQUIV_WEIGHT +
+                self.fe2_mg_l/CONFIG.FE2_EQUIV_WEIGHT + 
+                self.fe3_mg_l/CONFIG.FE3_EQUIV_WEIGHT
             )
             anion_meq = (
-                self.hco3_mg_l/61.02 + self.so4_mg_l/48.03 +
-                self.co3_mg_l/30.0 + self.no3_mg_l/62.0 +
-                self.po4_mg_l/31.67 + self.f_mg_l/19.0 + self.oh_mg_l/17.0
+                self.hco3_mg_l/CONFIG.HCO3_EQUIV_WEIGHT + 
+                self.so4_mg_l/CONFIG.SO4_EQUIV_WEIGHT +
+                self.co3_mg_l/CONFIG.CO3_EQUIV_WEIGHT + 
+                self.no3_mg_l/CONFIG.NO3_EQUIV_WEIGHT +
+                self.po4_mg_l/CONFIG.PO4_EQUIV_WEIGHT + 
+                self.f_mg_l/CONFIG.F_EQUIV_WEIGHT + 
+                self.oh_mg_l/CONFIG.OH_EQUIV_WEIGHT
             )
             # Set Cl to balance
-            self.cl_mg_l = max(0, (cation_meq - anion_meq) * 35.45)
+            self.cl_mg_l = max(0, (cation_meq - anion_meq) * CONFIG.CL_EQUIV_WEIGHT)
             logger.info(f"Auto-calculated Cl for charge balance: {self.cl_mg_l:.1f} mg/L")
 
 
@@ -124,19 +126,19 @@ def configure_sac_vessel(input_data: SACConfigurationInput) -> SACConfigurationO
     design_notes = []
     
     # Calculate resin volume from BV/hr
-    resin_volume_m3 = water.flow_m3_hr / SAC_DESIGN_PARAMETERS["max_bed_volume_per_hour"]
-    design_notes.append(f"Resin volume based on 16 BV/hr: {resin_volume_m3:.2f} m³")
+    resin_volume_m3 = water.flow_m3_hr / CONFIG.MAX_BED_VOLUME_PER_HOUR
+    design_notes.append(f"Resin volume based on {CONFIG.MAX_BED_VOLUME_PER_HOUR} BV/hr: {resin_volume_m3:.2f} m³")
     
     # Calculate diameter from linear velocity
-    required_area_m2 = water.flow_m3_hr / SAC_DESIGN_PARAMETERS["max_linear_velocity_m_hr"]
-    design_notes.append(f"Cross-sectional area for 25 m/hr: {required_area_m2:.2f} m²")
+    required_area_m2 = water.flow_m3_hr / CONFIG.MAX_LINEAR_VELOCITY_M_HR
+    design_notes.append(f"Cross-sectional area for {CONFIG.MAX_LINEAR_VELOCITY_M_HR} m/hr: {required_area_m2:.2f} m²")
     
     # Split into multiple vessels if needed for diameter constraint
     n_service = 1
     while True:
         area_per_vessel = required_area_m2 / n_service
         diameter = math.sqrt(4 * area_per_vessel / math.pi)
-        if diameter <= SAC_DESIGN_PARAMETERS["max_vessel_diameter_m"]:
+        if diameter <= CONFIG.MAX_VESSEL_DIAMETER_M:
             break
         n_service += 1
     
@@ -150,7 +152,7 @@ def configure_sac_vessel(input_data: SACConfigurationInput) -> SACConfigurationO
     
     # Verify linear velocity after rounding
     actual_linear_velocity = (water.flow_m3_hr / n_service) / actual_area
-    if actual_linear_velocity > SAC_DESIGN_PARAMETERS["max_linear_velocity_m_hr"]:
+    if actual_linear_velocity > CONFIG.MAX_LINEAR_VELOCITY_M_HR:
         # Need to increase diameter slightly
         diameter = math.ceil(diameter_original * 10) / 10  # Round up
         actual_area = math.pi * diameter**2 / 4
@@ -160,10 +162,10 @@ def configure_sac_vessel(input_data: SACConfigurationInput) -> SACConfigurationO
     resin_volume_per_vessel = resin_volume_m3 / n_service
     bed_depth = max(
         resin_volume_per_vessel / actual_area,
-        SAC_DESIGN_PARAMETERS["min_bed_depth_m"]
+        CONFIG.MIN_BED_DEPTH_M
     )
     
-    if bed_depth == SAC_DESIGN_PARAMETERS["min_bed_depth_m"]:
+    if bed_depth == CONFIG.MIN_BED_DEPTH_M:
         design_notes.append("Minimum bed depth applied")
         # Recalculate actual resin volume
         resin_volume_per_vessel = bed_depth * actual_area
@@ -176,7 +178,7 @@ def configure_sac_vessel(input_data: SACConfigurationInput) -> SACConfigurationO
     n_standby = 1
     
     # Calculate freeboard
-    freeboard_m = bed_depth * SAC_DESIGN_PARAMETERS["freeboard_percent"] / 100
+    freeboard_m = bed_depth * CONFIG.FREEBOARD_PERCENT / 100
     
     # Total vessel height
     # Include space for bottom distributor/support (0.3m) and top distributor/nozzles (0.2m)
@@ -208,10 +210,10 @@ def configure_sac_vessel(input_data: SACConfigurationInput) -> SACConfigurationO
         target_hardness_mg_l_caco3=target_hardness,
         regeneration_parameters={
             "regenerant_type": "NaCl",
-            "regenerant_dose_kg_m3": 125.0,  # kg NaCl per m³ resin
-            "regenerant_concentration_percent": 10.0,
-            "rinse_volume_BV": 4.0,  # Bed volumes for rinse
-            "regenerant_flow_BV_hr": 4.0  # Slow flow for regeneration
+            "regenerant_dose_kg_m3": CONFIG.REGENERANT_DOSE_KG_M3,
+            "regenerant_concentration_percent": CONFIG.REGENERANT_CONCENTRATION_PERCENT,
+            "rinse_volume_BV": CONFIG.RINSE_VOLUME_BV,
+            "regenerant_flow_BV_hr": CONFIG.REGENERANT_FLOW_BV_HR
         },
         design_notes=design_notes
     )

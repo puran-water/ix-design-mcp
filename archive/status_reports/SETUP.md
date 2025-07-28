@@ -68,7 +68,7 @@ export PHREEQC_DATABASE_PATH=/path/to/phreeqc/database
 ### 1. Test Basic Functionality
 
 ```bash
-python -c "from tools.phreeqpy_engine import PhreeqPyEngine; print('PhreeqPy OK')"
+python -c "from watertap_ix_transport.production_models import ProductionPhreeqcEngine; print('PHREEQC Engine OK')"
 ```
 
 ### 2. Run Unit Tests
