@@ -57,6 +57,19 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# Import SAC tools at module level to prevent hanging on first call
+logger.info("Starting imports of SAC tools...")
+import_start = time.time()
+
+from tools.sac_configuration import configure_sac_vessel, SACConfigurationInput
+logger.info(f"Imported sac_configuration in {time.time() - import_start:.2f}s")
+
+from tools.sac_simulation import simulate_sac_phreeqc, SACSimulationInput
+logger.info(f"Imported sac_simulation in {time.time() - import_start:.2f}s total")
+
+from tools.breakthrough_plotting import plot_breakthrough_curves as plot_func, BreakthroughPlotInput
+logger.info(f"All SAC tools imported in {time.time() - import_start:.2f}s total")
+
 # Configuration constants
 MAX_REQUEST_SIZE = 10 * 1024 * 1024  # 10MB max request size
 REQUEST_TIMEOUT = 300  # 5 minutes timeout for long simulations
@@ -267,8 +280,6 @@ async def configure_sac_ix(configuration_input: Dict[str, Any]) -> Dict[str, Any
                 "hint": "Please reduce the size of your request"
             }
         
-        from tools.sac_configuration import configure_sac_vessel, SACConfigurationInput
-        
         # Convert dict to pydantic model
         sac_input = SACConfigurationInput(**configuration_input)
         
@@ -363,7 +374,6 @@ async def simulate_sac_ix(simulation_input: str) -> Dict[str, Any]:
             }
         
         import asyncio
-        from tools.sac_simulation import simulate_sac_phreeqc, SACSimulationInput
         
         # Parse input JSON
         input_data = json.loads(simulation_input)
@@ -387,6 +397,73 @@ async def simulate_sac_ix(simulation_input: str) -> Dict[str, Any]:
             "details": "SAC simulation failed. Check PHREEQC installation and input data."
         }
 
+# Add breakthrough curve plotting tool
+@mcp.tool(
+    description="""Generate breakthrough curve plots from simulation data.
+    
+    Creates visualizations from ion exchange simulation results in various formats.
+    This tool is separate from simulation to avoid heavy imports unless plotting is needed.
+    
+    Input JSON structure:
+    {
+        "breakthrough_data": {
+            "bed_volumes": [...],      // Array of bed volume values
+            "ca_pct": [...],          // Ca breakthrough as % of feed
+            "mg_pct": [...],          // Mg breakthrough as % of feed
+            "na_mg_l": [...],         // Na concentration in mg/L
+            "hardness_mg_l": [...]    // Total hardness in mg/L CaCO3
+        },
+        "feed_na_mg_l": 850.0,        // Feed sodium for reference line
+        "target_hardness_mg_l": 5.0,  // Target hardness for breakthrough
+        "output_format": "html"       // "png", "html", or "csv"
+    }
+    
+    Output formats:
+    - 'png': Static matplotlib plot (150 DPI)
+    - 'html': Interactive Plotly plot with zoom/pan
+    - 'csv': Data export for external plotting
+    
+    Returns:
+    - status: "success" or "error"
+    - output_path: Path to generated file
+    - output_format: Format used
+    - file_size_kb: Size of output file
+    """
+)
+async def plot_breakthrough_curves(plot_input: str) -> Dict[str, Any]:
+    """Generate breakthrough curve visualizations."""
+    try:
+        # Validate input size
+        if len(plot_input) > MAX_REQUEST_SIZE:
+            return {
+                "status": "error",
+                "error": "Request too large",
+                "details": f"Request size {len(plot_input)} bytes exceeds maximum {MAX_REQUEST_SIZE} bytes"
+            }
+        
+        import asyncio
+        
+        # Parse input JSON
+        input_data = json.loads(plot_input)
+        
+        # Convert to pydantic model
+        plot_data = BreakthroughPlotInput(**input_data)
+        
+        # Run plotting in thread pool to avoid blocking
+        loop = asyncio.get_event_loop()
+        result = await loop.run_in_executor(None, plot_func, plot_data)
+        
+        # Convert result to dict
+        return result.model_dump()
+        
+    except Exception as e:
+        logger.error(f"Plotting failed: {e}")
+        return {
+            "status": "error",
+            "error": str(e),
+            "details": "Failed to generate breakthrough curves. Check input data format."
+        }
+
 # Tools are already registered via decorators above
 
 # Main entry point
@@ -399,6 +476,7 @@ def main():
     logger.info("Available tools:")
     logger.info("  - configure_sac_ix: SAC vessel hydraulic sizing (no chemistry calculations)")
     logger.info("  - simulate_sac_ix: Direct PHREEQC simulation with target hardness breakthrough")
+    logger.info("  - plot_breakthrough_curves: Generate plots from simulation data (PNG/HTML/CSV)")
     
     # Log key features
     logger.info("\nKey Features:")

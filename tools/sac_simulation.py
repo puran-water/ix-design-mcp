@@ -11,9 +11,6 @@ import logging
 from pathlib import Path
 from typing import Dict, Any, Optional, List, Tuple
 import numpy as np
-import matplotlib
-matplotlib.use('Agg')  # Non-interactive backend
-import matplotlib.pyplot as plt
 from datetime import datetime
 from pydantic import BaseModel, Field
 
@@ -49,6 +46,7 @@ class SACSimulationInput(BaseModel):
     water_analysis: SACWaterComposition
     vessel_configuration: SACVesselConfiguration
     target_hardness_mg_l_caco3: float
+    full_data: bool = Field(default=False, description="Return full resolution data (1000+ points) instead of smart-sampled data (~80 points)")
 
 
 class SACSimulationOutput(BaseModel):
@@ -61,7 +59,7 @@ class SACSimulationOutput(BaseModel):
     warnings: List[str]
     phreeqc_determined_capacity_factor: float  # NOT heuristic
     capacity_utilization_percent: float
-    plot_path: str
+    breakthrough_data: Dict[str, List[float]]  # Always included for plotting tool
     simulation_details: Dict[str, Any]
 
 
@@ -335,67 +333,80 @@ END
             return float(bv_array[0])
         return None
         
-    def generate_breakthrough_plot_with_target(
-        self,
-        bv_array: np.ndarray,
-        curves: Dict[str, np.ndarray],
-        water: SACWaterComposition,
-        target_hardness: float,
-        output_path: Path
-    ) -> str:
-        """Generate breakthrough curves plot with target hardness line."""
-        fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(10, 10))
+
+
+def smart_sample_breakthrough_data(
+    bv_array: np.ndarray,
+    curves: Dict[str, np.ndarray], 
+    breakthrough_bv: float,
+    critical_window: float = 10.0,
+    transition_window: float = 30.0
+) -> Dict[str, List[float]]:
+    """
+    Intelligently sample breakthrough data with high resolution near breakthrough.
+    
+    Sampling strategy:
+    - Critical zone (breakthrough ± critical_window BV): Keep every point
+    - Transition zone (breakthrough ± transition_window BV): Every 5th point
+    - Far zones (beyond transition): Every 20th point
+    - Always includes first and last points
+    
+    Args:
+        bv_array: Array of bed volumes
+        curves: Dictionary of breakthrough curves (Ca_pct, Mg_pct, etc.)
+        breakthrough_bv: The bed volume where breakthrough occurs
+        critical_window: BV window around breakthrough for full resolution (default 10)
+        transition_window: BV window for medium resolution (default 30)
         
-        # Plot 1: Ca and Mg breakthrough curves with hardness
-        ax1.plot(bv_array, curves['Ca_pct'], 'b-', linewidth=2, label='Ca²⁺')
-        ax1.plot(bv_array, curves['Mg_pct'], 'g-', linewidth=2, label='Mg²⁺')
+    Returns:
+        Dictionary with sampled arrays, typically reducing 1000+ points to ~60-80
+    """
+    indices = []
+    
+    # Sample based on distance from breakthrough
+    for i in range(len(bv_array)):
+        bv = bv_array[i]
+        distance = abs(bv - breakthrough_bv)
         
-        # Plot total hardness on secondary y-axis
-        ax1_twin = ax1.twinx()
-        ax1_twin.plot(bv_array, curves['Hardness'], 'k-', linewidth=2, label='Total Hardness')
-        ax1_twin.axhline(
-            y=target_hardness,
-            color='red',
-            linestyle='--',
-            linewidth=2,
-            label=f'Target Hardness ({target_hardness} mg/L CaCO₃)'
-        )
-        ax1_twin.set_ylabel('Hardness (mg/L as CaCO₃)')
-        ax1_twin.legend(loc='upper right')
-        
-        ax1.axhline(y=100, color='gray', linestyle=':', alpha=0.3, label='100% (Feed concentration)')
-        ax1.set_xlabel('Bed Volumes (BV)')
-        ax1.set_ylabel('Effluent Concentration (% of Feed)')
-        ax1.set_title('Hardness Breakthrough Curves - Target Hardness Definition')
-        ax1.grid(True, alpha=0.3)
-        ax1.legend(loc='upper left')
-        ax1.set_xlim(0, max(bv_array))
-        
-        # Dynamic Y-axis to accommodate Mg spike
-        max_conc = max(max(curves['Ca_pct']), max(curves['Mg_pct']))
-        ax1.set_ylim(0, max(120, max_conc * 1.1))
-        
-        # Plot 2: Na release curve
-        ax2.plot(bv_array, curves['Na'], 'orange', linewidth=2, label='Na⁺')
-        ax2.axhline(y=water.na_mg_l, 
-                    color='r', linestyle='--', alpha=0.5, 
-                    label=f'Feed Na⁺ ({water.na_mg_l:.0f} mg/L)')
-        ax2.set_xlabel('Bed Volumes (BV)')
-        ax2.set_ylabel('Na⁺ Concentration (mg/L)')
-        ax2.set_title('Sodium Release Curve')
-        ax2.grid(True, alpha=0.3)
-        ax2.legend()
-        ax2.set_xlim(0, max(bv_array))
-        
-        plt.tight_layout()
-        
-        # Save plot
-        plot_filename = f"sac_breakthrough_{datetime.now().strftime('%Y%m%d_%H%M%S')}.png"
-        plot_path = output_path / plot_filename
-        plt.savefig(plot_path, dpi=150, bbox_inches='tight')
-        plt.close()
-        
-        return str(plot_path)
+        if distance <= critical_window:
+            # Critical zone: keep every point
+            indices.append(i)
+        elif distance <= transition_window:
+            # Transition zone: every 5th point
+            if i % 5 == 0:
+                indices.append(i)
+        else:
+            # Far zone: every 20th point
+            if i % 20 == 0:
+                indices.append(i)
+    
+    # Always include first and last points for complete curve
+    if len(indices) > 0:
+        if indices[0] != 0:
+            indices.insert(0, 0)
+        if indices[-1] != len(bv_array) - 1:
+            indices.append(len(bv_array) - 1)
+    else:
+        # Fallback if no indices selected
+        indices = [0, len(bv_array) - 1]
+    
+    # Sort indices to maintain order
+    indices = sorted(set(indices))
+    
+    # Extract sampled data
+    sampled_data = {
+        'bed_volumes': bv_array[indices].tolist(),
+        'ca_pct': curves['Ca_pct'][indices].tolist(),
+        'mg_pct': curves['Mg_pct'][indices].tolist(),
+        'na_mg_l': curves['Na'][indices].tolist(),
+        'hardness_mg_l': curves['Hardness'][indices].tolist()
+    }
+    
+    logger.info(f"Smart sampling: {len(bv_array)} points reduced to {len(indices)} points")
+    logger.info(f"  - Critical zone (±{critical_window} BV): {sum(1 for i in indices if abs(bv_array[i] - breakthrough_bv) <= critical_window)} points")
+    logger.info(f"  - Data reduction: {(1 - len(indices)/len(bv_array))*100:.1f}%")
+    
+    return sampled_data
 
 
 def simulate_sac_phreeqc(input_data: SACSimulationInput) -> SACSimulationOutput:
@@ -412,6 +423,7 @@ def simulate_sac_phreeqc(input_data: SACSimulationInput) -> SACSimulationOutput:
     water = input_data.water_analysis
     vessel = input_data.vessel_configuration
     target_hardness = input_data.target_hardness_mg_l_caco3
+    full_data = input_data.full_data
     
     # USE BED VOLUME FROM CONFIGURATION DIRECTLY
     bed_volume_L = vessel.bed_volume_L  # From configuration tool
@@ -453,10 +465,6 @@ def simulate_sac_phreeqc(input_data: SACSimulationInput) -> SACSimulationOutput:
         'resin_capacity_eq_L': resin_capacity_eq_L,
         'bed_porosity': porosity
     }
-    
-    # Create output directory
-    output_dir = Path("simulation_outputs")
-    output_dir.mkdir(exist_ok=True)
     
     # Run PHREEQC simulation ONCE
     sim = IXDirectPhreeqcSimulation()
@@ -513,10 +521,27 @@ def simulate_sac_phreeqc(input_data: SACSimulationInput) -> SACSimulationOutput:
     logger.info(f"Service time: {service_time_hours:.1f} hours")
     logger.info(f"Total capacity: {total_capacity_eq:.1f} eq (based on bed volume)")
     
-    # Generate plot
-    plot_path = sim.generate_breakthrough_plot_with_target(
-        bv_array, curves, water, target_hardness, output_dir
-    )
+    # Generate breakthrough data - either full or smart-sampled
+    if full_data:
+        # Return full resolution data (1000+ points)
+        logger.info("Returning full resolution breakthrough data")
+        breakthrough_data = {
+            'bed_volumes': bv_array.tolist(),
+            'ca_pct': curves['Ca_pct'].tolist(),
+            'mg_pct': curves['Mg_pct'].tolist(),
+            'na_mg_l': curves['Na'].tolist(),
+            'hardness_mg_l': curves['Hardness'].tolist()
+        }
+    else:
+        # Use smart sampling to reduce data size and prevent MCP BrokenResourceError
+        # This reduces ~1000 points to ~60-80 points while preserving critical detail
+        breakthrough_data = smart_sample_breakthrough_data(
+            bv_array=bv_array,
+            curves=curves,
+            breakthrough_bv=breakthrough_bv,
+            critical_window=10.0,  # ±10 BV around breakthrough: full resolution
+            transition_window=30.0  # ±30 BV: medium resolution
+        )
     
     # Calculate regenerant requirements
     hardness_removed_eq = hardness_meq_L * breakthrough_bv * bed_volume_L / 1000
@@ -532,7 +557,7 @@ def simulate_sac_phreeqc(input_data: SACSimulationInput) -> SACSimulationOutput:
         warnings=warnings,
         phreeqc_determined_capacity_factor=round(phreeqc_competition_factor, 2),
         capacity_utilization_percent=round(actual_capacity_utilization * 100, 1),
-        plot_path=str(plot_path),
+        breakthrough_data=breakthrough_data,
         simulation_details={
             "bed_volume_L": bed_volume_L,
             "theoretical_bv": round(theoretical_bv, 1),
