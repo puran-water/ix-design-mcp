@@ -14,6 +14,7 @@ This MCP server provides AI-powered tools for designing and simulating SAC (Stro
 - **Target Hardness Breakthrough**: Dynamic simulation until target effluent quality is reached
 - **No Mock Data**: All results come from actual PHREEQC calculations
 - **FastMCP Framework**: Built on FastMCP for high-performance async operations
+- **Three-Tool Architecture**: Separate tools for configuration, simulation, and plotting to prevent import-time delays
 
 ## Tools
 
@@ -25,6 +26,7 @@ Performs hydraulic sizing for SAC vessels with:
 - N+1 redundancy (1 service + 1 standby)
 - Shipping container constraint: 2.4 m max diameter
 - Returns bed volume for direct use in simulation
+- **Fast loading** - No heavy dependencies
 
 ### simulate_sac_ix
 Performs Direct PHREEQC simulation with:
@@ -34,7 +36,17 @@ Performs Direct PHREEQC simulation with:
 - Real capacity factors from PHREEQC (no heuristics)
 - Effluent hardness monitoring (Ca × 2.5 + Mg × 4.1 as CaCO3)
 - Automatic simulation extension if breakthrough not found
-- PNG breakthrough curve generation
+- **Smart breakthrough sampling**: ~90% data reduction while preserving critical detail
+- Optional `full_data` parameter for complete resolution
+
+### plot_breakthrough_curves
+Generates breakthrough curve visualizations:
+- Multiple output formats: PNG, HTML, CSV
+- Interactive HTML plots with Plotly (zoom, pan, hover)
+- Static PNG plots with matplotlib (150 DPI)
+- CSV export for external analysis
+- Lazy imports - matplotlib/plotly only loaded when needed
+- Completely optional - simulation can run without plotting
 
 ## Design Philosophy
 
@@ -42,6 +54,27 @@ Performs Direct PHREEQC simulation with:
 - **Chemistry in PHREEQC**: All ion exchange chemistry, selectivity, and competition handled by PHREEQC
 - **No Heuristics**: No capacity derating factors or empirical corrections
 - **Target-Based Operation**: Simulation continues until effluent exceeds target hardness
+
+## Performance Architecture
+
+The three-tool architecture eliminates hanging issues that can occur with MCP stdio transport:
+
+| Tool | Load Time | Dependencies | Purpose |
+|------|-----------|--------------|---------|
+| configure_sac_ix | ~0.3s | Basic Python only | Fast vessel sizing |
+| simulate_sac_ix | ~3-4s | PHREEQC engines | Breakthrough simulation |
+| plot_breakthrough_curves | ~0.015s* | Lazy matplotlib/plotly | Optional visualization |
+
+*Plotting tool loads instantly but imports matplotlib/plotly only when actually generating plots.
+
+### Why Three Tools?
+
+1. **No More Hanging**: Configuration tool loads instantly without matplotlib
+2. **Flexibility**: Run simulations without plotting overhead
+3. **Performance**: Each tool only imports what it needs
+4. **Optional Plotting**: Visualization is completely optional
+
+The separation ensures that the MCP handshake completes immediately for all tools, preventing the timeout issues that occurred when matplotlib was imported at module level.
 
 ## Installation
 
@@ -144,11 +177,42 @@ Pass the configuration response directly to the simulation tool:
 ```json
 {
   "status": "success",
-  "breakthrough_time_hours": 18.5,
-  "breakthrough_bed_volumes": 185,
-  "capacity_factor": 0.42,
-  "breakthrough_curve_path": "sac_breakthrough_20241228_143022.png",
+  "breakthrough_bv": 118.6,
+  "service_time_hours": 7.4,
+  "breakthrough_hardness_mg_l_caco3": 5.0,
+  "phreeqc_determined_capacity_factor": 0.42,
+  "breakthrough_data": {
+    "bed_volumes": [0.0, 1.0, 2.0, ...],
+    "ca_pct": [0.0, 0.1, 0.2, ...],
+    "mg_pct": [0.0, 0.1, 0.3, ...],
+    "na_mg_l": [1800, 1750, 1700, ...],
+    "hardness_mg_l": [0.0, 0.5, 1.0, ...]
+  },
   "warnings": []
+}
+```
+
+### Example Plotting Request
+
+Use the breakthrough data from simulation to generate plots:
+
+```json
+{
+  "breakthrough_data": { /* from simulation response */ },
+  "feed_na_mg_l": 838.9,
+  "target_hardness_mg_l": 5.0,
+  "output_format": "html"
+}
+```
+
+### Example Plotting Response
+
+```json
+{
+  "status": "success",
+  "output_path": "output/plots/breakthrough_curves_20250728_184449.html",
+  "output_format": "html",
+  "file_size_kb": 36.88
 }
 ```
 

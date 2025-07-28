@@ -4,11 +4,8 @@ Ion Exchange MCP Server Tools
 This module contains the MCP tool implementations for ion exchange system design.
 """
 
-# Import only the tools that are actually used
-from .sac_configuration import configure_sac_vessel, SACConfigurationInput
-from .sac_simulation import simulate_sac_phreeqc, SACSimulationInput
-
-# Import utility modules
+# Import only shared utilities - NO tool imports to prevent coupling!
+# Tools should be imported directly where needed to maintain independence
 from .core_config import CONFIG
 from .unit_conversions import (
     mg_to_meq,
@@ -21,12 +18,7 @@ from .unit_conversions import (
 )
 
 __all__ = [
-    # SAC tools
-    'configure_sac_vessel',
-    'SACConfigurationInput', 
-    'simulate_sac_phreeqc',
-    'SACSimulationInput',
-    # Utilities
+    # Utilities only - tools are imported directly in server.py
     'CONFIG',
     'mg_to_meq',
     'meq_to_mg',
