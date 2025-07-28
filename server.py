@@ -208,46 +208,57 @@ mcp = FastMCP("IX Design Server")
     - N+1 redundancy (1 service + 1 standby vessel)
     - Shipping container constraint: 2.4 m maximum diameter
     
-    CORRECT INPUT STRUCTURE:
+    Input parameter: configuration_input (object with water_analysis and target_hardness_mg_l_caco3)
+    
+    Example:
     {
-      "configuration_input": {
-        "water_analysis": {
-          "flow_m3_hr": 100,
-          "ca_mg_l": 80.06,
-          "mg_mg_l": 24.29,
-          "na_mg_l": 838.9,
-          "hco3_mg_l": 121.95,
-          "pH": 7.8,
-          "cl_mg_l": 1435  // Optional - auto-calculated if not provided
-        },
-        "target_hardness_mg_l_caco3": 5.0  // Default 5.0 if not specified
-      }
+      "water_analysis": {
+        "flow_m3_hr": 100,
+        "ca_mg_l": 80.06,
+        "mg_mg_l": 24.29,
+        "na_mg_l": 838.9,
+        "hco3_mg_l": 121.95,
+        "pH": 7.8,
+        "cl_mg_l": 1435
+      },
+      "target_hardness_mg_l_caco3": 5.0
     }
     
-    Required in water_analysis:
-    - flow_m3_hr: Feed water flow rate (m³/hr)
-    - ca_mg_l: Calcium (mg/L)
-    - mg_mg_l: Magnesium (mg/L)
-    - na_mg_l: Sodium (mg/L)
-    - hco3_mg_l: Bicarbonate (mg/L)
-    - pH: Feed water pH
+    Required fields:
+    - water_analysis.flow_m3_hr: Feed water flow rate (m³/hr)
+    - water_analysis.ca_mg_l: Calcium (mg/L)
+    - water_analysis.mg_mg_l: Magnesium (mg/L)  
+    - water_analysis.na_mg_l: Sodium (mg/L)
+    - water_analysis.hco3_mg_l: Bicarbonate (mg/L)
+    - water_analysis.pH: Feed water pH
     
-    Optional in water_analysis:
-    - cl_mg_l: Chloride (mg/L) - auto-balanced if not provided
-    - k_mg_l, nh4_mg_l, fe2_mg_l, fe3_mg_l: Other cations
-    - so4_mg_l, co3_mg_l, no3_mg_l, po4_mg_l, f_mg_l, oh_mg_l: Other anions
-    - co2_mg_l, sio2_mg_l, b_oh_3_mg_l: Neutrals
-    - temperature_celsius: Default 25°C
-    - pressure_bar: Default 3.0 bar
-    
-    Returns vessel configuration with bed_volume_L for simulation.
+    Optional fields:
+    - water_analysis.cl_mg_l: Chloride (auto-balanced if not provided)
+    - target_hardness_mg_l_caco3: Target effluent hardness (default 5.0)
     """
 )
 async def configure_sac_ix(configuration_input: Dict[str, Any]) -> Dict[str, Any]:
     """Configure SAC vessel with hydraulic sizing only."""
+    import time
+    start_time = time.time()
+    logger.info(f"configure_sac_ix started at {start_time}")
+    
     try:
-        # Validate input size
         import json
+        import asyncio
+        from concurrent.futures import ThreadPoolExecutor
+        
+        # Handle both string and object inputs
+        if isinstance(configuration_input, str):
+            try:
+                configuration_input = json.loads(configuration_input)
+            except json.JSONDecodeError:
+                return {
+                    "error": "Invalid JSON input",
+                    "details": "Input must be a valid JSON object or dict"
+                }
+        
+        # Validate input size
         input_size = len(json.dumps(configuration_input))
         if input_size > MAX_REQUEST_SIZE:
             return {
@@ -261,11 +272,32 @@ async def configure_sac_ix(configuration_input: Dict[str, Any]) -> Dict[str, Any
         # Convert dict to pydantic model
         sac_input = SACConfigurationInput(**configuration_input)
         
-        # Call the configuration function
-        result = configure_sac_vessel(sac_input)
+        # Log before calling the function
+        logger.info("About to call configure_sac_vessel")
+        
+        # Run synchronous function in thread pool to avoid blocking event loop
+        # Add timeout to prevent infinite hanging
+        loop = asyncio.get_event_loop()
+        try:
+            result = await asyncio.wait_for(
+                loop.run_in_executor(None, configure_sac_vessel, sac_input),
+                timeout=30.0  # 30 second timeout
+            )
+            logger.info("configure_sac_vessel returned")
+        except asyncio.TimeoutError:
+            logger.error("configure_sac_vessel timed out after 30 seconds")
+            return {
+                "error": "Configuration timeout",
+                "details": "The configuration process took too long to complete",
+                "hint": "Try again or check server logs"
+            }
         
         # Convert result to dict
-        return result.model_dump()
+        output = result.model_dump()
+        
+        elapsed = time.time() - start_time
+        logger.info(f"configure_sac_ix completed in {elapsed:.2f} seconds")
+        return output
         
     except Exception as e:
         logger.error(f"SAC configuration failed: {e}")
@@ -330,6 +362,7 @@ async def simulate_sac_ix(simulation_input: str) -> Dict[str, Any]:
                 "details": f"Request size {len(simulation_input)} bytes exceeds maximum {MAX_REQUEST_SIZE} bytes"
             }
         
+        import asyncio
         from tools.sac_simulation import simulate_sac_phreeqc, SACSimulationInput
         
         # Parse input JSON
@@ -338,8 +371,10 @@ async def simulate_sac_ix(simulation_input: str) -> Dict[str, Any]:
         # Convert to pydantic model
         sim_input = SACSimulationInput(**input_data)
         
-        # Run simulation
-        result = simulate_sac_phreeqc(sim_input)
+        # Run simulation in thread pool to avoid blocking event loop
+        # This is important as PHREEQC simulations can take several seconds
+        loop = asyncio.get_event_loop()
+        result = await loop.run_in_executor(None, simulate_sac_phreeqc, sim_input)
         
         # Convert result to dict
         return result.model_dump()

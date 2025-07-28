@@ -71,7 +71,6 @@ class IXDirectPhreeqcSimulation:
     def __init__(self):
         """Initialize simulation."""
         # Try optimized engine first for better performance
-        engine_initialized = False
         if OPTIMIZED_AVAILABLE:
             try:
                 # Get PHREEQC path from config
@@ -82,22 +81,22 @@ class IXDirectPhreeqcSimulation:
                     max_workers=4     # Parallel execution
                 )
                 logger.info("Using OptimizedPhreeqcEngine with caching and batch processing")
-                engine_initialized = True
+                return  # Successfully initialized, no need for fallback
             except Exception as e:
                 logger.warning(f"Failed to initialize OptimizedPhreeqcEngine: {e}")
         
-        # Fall back to DirectPhreeqcEngine
-        if not engine_initialized:
-            # Get PHREEQC executable from centralized config
-            phreeqc_exe = CONFIG.get_phreeqc_exe()
-            
-            try:
-                self.engine = DirectPhreeqcEngine(phreeqc_path=str(phreeqc_exe), keep_temp_files=False)
-                logger.info(f"Using DirectPhreeqcEngine at: {phreeqc_exe}")
-            except (FileNotFoundError, RuntimeError) as e:
-                logger.warning(f"Failed to initialize PHREEQC at {phreeqc_exe}: {e}")
-                # Try without specifying path (will search system)
-                self.engine = DirectPhreeqcEngine(keep_temp_files=False)
+        # Fall back to DirectPhreeqcEngine if optimized not available or failed
+        # Get PHREEQC executable from centralized config
+        phreeqc_exe = CONFIG.get_phreeqc_exe()
+        
+        try:
+            self.engine = DirectPhreeqcEngine(phreeqc_path=str(phreeqc_exe), keep_temp_files=False)
+            logger.info(f"Using DirectPhreeqcEngine at: {phreeqc_exe}")
+        except (FileNotFoundError, RuntimeError) as e:
+            logger.warning(f"Failed to initialize PHREEQC at {phreeqc_exe}: {e}")
+            # Try without specifying path (will search system)
+            self.engine = DirectPhreeqcEngine(keep_temp_files=False)
+            logger.info("Using DirectPhreeqcEngine with system PHREEQC")
             
     def run_sac_simulation(
         self,
@@ -119,6 +118,10 @@ class IXDirectPhreeqcSimulation:
             bv_array: Array of bed volumes
             curves: Dict with Ca, Mg, Na breakthrough curves
         """
+        # Log which engine is being used
+        engine_type = type(self.engine).__name__
+        logger.info(f"Running simulation with engine: {engine_type}")
+        
         # Use bed volume from configuration directly
         bed_volume_L = vessel_config['bed_volume_L']
         bed_depth_m = vessel_config['bed_depth_m']
