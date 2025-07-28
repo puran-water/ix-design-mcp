@@ -182,10 +182,6 @@ class IXConfigurationOutput(BaseModel):
     flowsheet_type: str = Field(..., description="Selected flowsheet configuration")
     flowsheet_description: str = Field(..., description="Description of the selected flowsheet")
     
-    # Na+ competition analysis
-    na_competition_factor: float = Field(..., description="Capacity reduction factor due to Na+ competition (0-1)")
-    effective_capacity: Dict[str, float] = Field(..., description="Effective resin capacities accounting for Na+ competition")
-    
     # Vessel configurations
     ix_vessels: Dict[str, VesselConfiguration] = Field(..., description="Vessel configurations for each IX stage")
     
@@ -197,15 +193,6 @@ class IXConfigurationOutput(BaseModel):
         ...,
         description="Hydraulic parameters (bed_volumes_per_hour, linear_velocity_m_hr, etc.)"
     )
-    
-    # Warnings or recommendations
-    warnings: Optional[List[str]] = Field(None, description="Any warnings or recommendations")
-    
-    # Flowsheet characteristics
-    characteristics: Optional[Dict[str, Any]] = Field(None, description="Flowsheet characteristics and suitability info")
-    
-    # Economics
-    economics: Optional[Dict[str, Any]] = Field(None, description="Economic analysis (CAPEX, OPEX, LCOW)")
 
 
 class IXMultiConfigurationOutput(BaseModel):
