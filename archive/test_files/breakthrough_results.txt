@@ -1,6 +1,0 @@
-PHREEQC Extended Run Results
-========================================
-Ca_breakthrough_BV: None
-Mg_breakthrough_BV: None
-  Ca breakthrough: Not detected in 10000 BV
-  Mg breakthrough: Not detected in 10000 BV
