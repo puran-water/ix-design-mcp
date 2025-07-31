@@ -67,8 +67,17 @@ logger.info(f"Imported sac_configuration in {time.time() - import_start:.2f}s")
 from tools.sac_simulation import simulate_sac_phreeqc, SACSimulationInput
 logger.info(f"Imported sac_simulation in {time.time() - import_start:.2f}s total")
 
-from tools.breakthrough_plotting import plot_breakthrough_curves as plot_func, BreakthroughPlotInput
 logger.info(f"All SAC tools imported in {time.time() - import_start:.2f}s total")
+
+# Import notebook runner for integrated analysis
+try:
+    from tools.notebook_runner import run_sac_notebook_analysis_impl
+    logger.info("Notebook runner imported successfully")
+    NOTEBOOK_RUNNER_AVAILABLE = True
+except ImportError as e:
+    logger.warning(f"Notebook runner not available: {e}")
+    logger.warning("Install papermill and nbconvert for notebook-based analysis")
+    NOTEBOOK_RUNNER_AVAILABLE = False
 
 # Configuration constants
 MAX_REQUEST_SIZE = 10 * 1024 * 1024  # 10MB max request size
@@ -76,6 +85,53 @@ REQUEST_TIMEOUT = 300  # 5 minutes timeout for long simulations
 
 # Create FastMCP instance with configuration
 mcp = FastMCP("IX Design Server")
+
+
+def get_project_root() -> Path:
+    """
+    Determine project root with multiple fallback strategies.
+    
+    Returns absolute path to project root directory.
+    """
+    # Strategy 1: Environment variable (most reliable for MCP clients)
+    if 'IX_DESIGN_MCP_ROOT' in os.environ:
+        root = Path(os.environ['IX_DESIGN_MCP_ROOT'])
+        if root.exists():
+            logger.info(f"Using project root from IX_DESIGN_MCP_ROOT: {root}")
+            return root
+        else:
+            logger.warning(f"IX_DESIGN_MCP_ROOT points to non-existent path: {root}")
+    
+    # Strategy 2: Relative to this file (fallback)
+    # Use resolve() to get absolute path first
+    root = Path(__file__).resolve().parent
+    logger.info(f"Using project root relative to server.py: {root}")
+    return root
+
+
+def validate_paths():
+    """Validate critical paths exist at startup."""
+    root = get_project_root()
+    required_paths = [
+        root / "notebooks",
+        root / "databases",
+        root / "tools"
+    ]
+    
+    missing_paths = []
+    for path in required_paths:
+        if not path.exists():
+            missing_paths.append(str(path))
+            logger.error(f"Required path not found: {path}")
+    
+    if missing_paths:
+        logger.error(f"Project root: {root}")
+        logger.error("Set IX_DESIGN_MCP_ROOT environment variable to the project directory")
+        logger.error("Example: export IX_DESIGN_MCP_ROOT=/path/to/ix-design-mcp")
+        raise FileNotFoundError(f"Required paths not found: {', '.join(missing_paths)}")
+    
+    logger.info("All required paths validated successfully")
+
 
 # Register tools with enhanced metadata
 # COMMENTED OUT - Replaced by SAC-only configuration
@@ -337,29 +393,60 @@ async def configure_sac_ix(configuration_input: Dict[str, Any]) -> Dict[str, Any
 
 # Rename Direct PHREEQC simulation tool
 @mcp.tool(
-    description="""Simulate SAC ion exchange with Direct PHREEQC engine.
+    description="""Simulate complete SAC ion exchange cycle (service + regeneration).
+    
+    Required input structure:
+    {
+        "water_analysis": {...},
+        "vessel_configuration": {...},
+        "target_hardness_mg_l_caco3": 5.0,
+        "regeneration_config": {
+            "regenerant_type": "NaCl",  // Default, HCl/H2SO4 also supported
+            "concentration_percent": 10,  // Default 10%
+            "regenerant_dose_g_per_L": 100,  // Regenerant dose in g/L resin (industry standard)
+            "mode": "staged_optimize",  // Default - finds optimal regenerant dose
+            "target_recovery": 0.90,  // Default 90% (achievable)
+            "regeneration_stages": 5,  // Default 5 stages
+            "flow_rate_bv_hr": 2.5,  // Default 2.5 BV/hr
+            "flow_direction": "back",  // Counter-current (default)
+            "backwash_enabled": true  // Default true
+        }
+    }
+    
+    Regenerant Dose Guidelines:
+    - NaCl: 80-120 g/L (standard), 150-200 g/L (high TDS water), up to 1000 g/L (extreme)
+    - HCl: 60-80 g/L (standard)
+    - H2SO4: 80-100 g/L (standard)
+    The system automatically calculates bed volumes from dose and concentration.
+    
+    Simulates complete industrial cycle:
+    1. Service run to breakthrough
+    2. Backwash (optional) - bed expansion and fines removal
+    3. Regeneration with auto-stop at target recovery
+    4. Slow rinse (displacement)
+    5. Fast rinse (quality polish)
     
     Key Features:
-    - Uses bed volume directly from configuration tool
     - PHREEQC determines actual operating capacity and competition
     - Dynamic breakthrough detection based on target hardness
-    - Resolution-independent approach
-    - Real PHREEQC results only (no mock data)
+    - Counter-current regeneration support
+    - Automatic regenerant dosing based on recovery
+    - Full waste stream characterization
     
-    Breakthrough Definition:
-    - Simulation continues until effluent hardness exceeds target
-    - Hardness = Ca × 2.5 + Mg × 4.1 (as CaCO3)
-    - Reports bed volumes treated before target is exceeded
-    - Automatically extends simulation if needed
-    
-    Input: JSON with configuration from configure_sac_ix tool
-    
-    Returns:
-    - Breakthrough BV when target hardness is reached
-    - Service time in hours
-    - PHREEQC-determined capacity factor (not heuristic)
-    - Breakthrough curve plot (saved as PNG)
-    - Warnings if breakthrough not found
+    Returns complete cycle results:
+    - Service phase:
+      - Breakthrough BV when target hardness is reached
+      - Service time in hours  
+      - PHREEQC-determined capacity factor
+      - Breakthrough curve data
+    - Regeneration phase:
+      - Actual regenerant consumption (kg)
+      - Peak waste TDS and hardness
+      - Total hardness removed (kg)
+      - Waste volume (m³)
+      - Final resin recovery (%)
+    - Total cycle time (hours)
+    - Multi-phase breakthrough data for complete cycle visualization
     """
 )
 async def simulate_sac_ix(simulation_input: str) -> Dict[str, Any]:
@@ -397,72 +484,40 @@ async def simulate_sac_ix(simulation_input: str) -> Dict[str, Any]:
             "details": "SAC simulation failed. Check PHREEQC installation and input data."
         }
 
-# Add breakthrough curve plotting tool
-@mcp.tool(
-    description="""Generate breakthrough curve plots from simulation data.
-    
-    Creates visualizations from ion exchange simulation results in various formats.
-    This tool is separate from simulation to avoid heavy imports unless plotting is needed.
-    
-    Input JSON structure:
-    {
-        "breakthrough_data": {
-            "bed_volumes": [...],      // Array of bed volume values
-            "ca_pct": [...],          // Ca breakthrough as % of feed
-            "mg_pct": [...],          // Mg breakthrough as % of feed
-            "na_mg_l": [...],         // Na concentration in mg/L
-            "hardness_mg_l": [...]    // Total hardness in mg/L CaCO3
-        },
-        "feed_na_mg_l": 850.0,        // Feed sodium for reference line
-        "target_hardness_mg_l": 5.0,  // Target hardness for breakthrough
-        "output_format": "html"       // "png", "html", or "csv"
-    }
-    
-    Output formats:
-    - 'png': Static matplotlib plot (150 DPI)
-    - 'html': Interactive Plotly plot with zoom/pan
-    - 'csv': Data export for external plotting
-    
-    Returns:
-    - status: "success" or "error"
-    - output_path: Path to generated file
-    - output_format: Format used
-    - file_size_kb: Size of output file
-    """
-)
-async def plot_breakthrough_curves(plot_input: str) -> Dict[str, Any]:
-    """Generate breakthrough curve visualizations."""
-    try:
-        # Validate input size
-        if len(plot_input) > MAX_REQUEST_SIZE:
-            return {
-                "status": "error",
-                "error": "Request too large",
-                "details": f"Request size {len(plot_input)} bytes exceeds maximum {MAX_REQUEST_SIZE} bytes"
-            }
+# Add notebook-based analysis tool if available
+if NOTEBOOK_RUNNER_AVAILABLE:
+    @mcp.tool(
+        description="""Run complete SAC analysis with integrated simulation and visualization.
         
-        import asyncio
+        Executes a Jupyter notebook that:
+        1. Simulates SAC ion exchange cycle (service + regeneration)
+        2. Generates interactive breakthrough curve visualizations
+        3. Produces comprehensive HTML analysis report
         
-        # Parse input JSON
-        input_data = json.loads(plot_input)
-        
-        # Convert to pydantic model
-        plot_data = BreakthroughPlotInput(**input_data)
-        
-        # Run plotting in thread pool to avoid blocking
-        loop = asyncio.get_event_loop()
-        result = await loop.run_in_executor(None, plot_func, plot_data)
-        
-        # Convert result to dict
-        return result.model_dump()
-        
-    except Exception as e:
-        logger.error(f"Plotting failed: {e}")
-        return {
-            "status": "error",
-            "error": str(e),
-            "details": "Failed to generate breakthrough curves. Check input data format."
+        Input structure (same as simulate_sac_ix):
+        {
+            "water_analysis": {...},
+            "vessel_configuration": {...},
+            "target_hardness_mg_l_caco3": 5.0,
+            "regeneration_config": {...}
         }
+        
+        Benefits over separate simulation + plotting:
+        - No data transfer issues between tools
+        - Automatic unit conversion handling
+        - Rich HTML report with plots and tables
+        - Complete analysis in single tool call
+        
+        Returns:
+        - Key metrics (breakthrough BV, recovery, etc.)
+        - Paths to executed notebook and HTML report
+        
+        Note: Requires papermill and nbconvert packages
+        """
+    )
+    async def run_sac_notebook_analysis(analysis_input: str) -> Dict[str, Any]:
+        """Execute SAC analysis notebook with parameters."""
+        return await run_sac_notebook_analysis_impl(analysis_input)
 
 # Tools are already registered via decorators above
 
@@ -472,11 +527,19 @@ def main():
     logger.info("Starting Ion Exchange Design MCP Server...")
     logger.info("Designed for RO pretreatment in industrial wastewater ZLD applications")
     
+    # Validate paths before continuing
+    try:
+        validate_paths()
+    except FileNotFoundError as e:
+        logger.error(f"Path validation failed: {e}")
+        sys.exit(1)
+    
     # Log available tools
     logger.info("Available tools:")
     logger.info("  - configure_sac_ix: SAC vessel hydraulic sizing (no chemistry calculations)")
     logger.info("  - simulate_sac_ix: Direct PHREEQC simulation with target hardness breakthrough")
-    logger.info("  - plot_breakthrough_curves: Generate plots from simulation data (PNG/HTML/CSV)")
+    if NOTEBOOK_RUNNER_AVAILABLE:
+        logger.info("  - run_sac_notebook_analysis: Integrated analysis with Jupyter notebook (RECOMMENDED)")
     
     # Log key features
     logger.info("\nKey Features:")
