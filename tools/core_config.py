@@ -9,6 +9,21 @@ from dataclasses import dataclass
 from pathlib import Path
 import os
 from typing import Optional
+import logging
+
+logger = logging.getLogger(__name__)
+
+# Get project root with robust approach
+def get_project_root() -> Path:
+    """Get project root with environment variable support."""
+    # Strategy 1: Environment variable (most reliable for MCP clients)
+    if 'IX_DESIGN_MCP_ROOT' in os.environ:
+        root = Path(os.environ['IX_DESIGN_MCP_ROOT'])
+        if root.exists():
+            return root
+    
+    # Strategy 2: Relative to this file (fallback)
+    return Path(__file__).resolve().parent.parent
 
 
 @dataclass(frozen=True)
@@ -146,10 +161,72 @@ class CoreConfig:
             raise ValueError(f"Unknown ion: {ion}. Known ions: {list(equiv_weights.keys())}")
         
         return equiv_weights[ion]
+    
+    def get_merged_database_path(self) -> Path:
+        """Get path to merged database, creating if needed"""
+        project_root = get_project_root()
+        merged_path = project_root / "databases" / "phreeqc_merged.dat"
+        
+        if not merged_path.exists():
+            logger.info("Creating merged PHREEQC database...")
+            setup_merged_database()
+        
+        return merged_path
 
 
 # Create singleton instance
 CONFIG = CoreConfig()
+
+
+# Database setup functions
+def setup_merged_database():
+    """Create phreeqc_merged.dat with exchange reactions included"""
+    project_root = get_project_root()
+    db_dir = project_root / "databases"
+    db_dir.mkdir(exist_ok=True)
+    
+    merged_path = db_dir / "phreeqc_merged.dat"
+    
+    # Read base phreeqc.dat
+    phreeqc_path = CONFIG.get_phreeqc_database()
+    with open(phreeqc_path, 'r') as f:
+        base_content = f.read()
+    
+    # Verify exchange section exists
+    if 'EXCHANGE_MASTER_SPECIES' not in base_content:
+        raise RuntimeError("Base database missing EXCHANGE_MASTER_SPECIES")
+    
+    # For high ionic strength (>10%), check for pitzer.dat
+    # For now, just use standard phreeqc.dat
+    merged_content = base_content
+    
+    # Write merged database
+    with open(merged_path, 'w') as f:
+        f.write(merged_content)
+    
+    # Verify
+    verify_merged_database(merged_path)
+    
+    logger.info(f"Created merged database at {merged_path}")
+    return merged_path
+
+
+def verify_merged_database(db_path: Path):
+    """Unit test to verify database has exchange reactions"""
+    with open(db_path, 'r') as f:
+        content = f.read()
+    
+    required_sections = [
+        'EXCHANGE_MASTER_SPECIES',
+        'EXCHANGE_SPECIES',
+        'X X-'
+    ]
+    
+    for section in required_sections:
+        if section not in content:
+            raise RuntimeError(f"Database missing required section: {section}")
+    
+    logger.info(f"Verified merged database at {db_path}")
 
 
 # Validation functions

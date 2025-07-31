@@ -14,7 +14,7 @@ This MCP server provides AI-powered tools for designing and simulating SAC (Stro
 - **Target Hardness Breakthrough**: Dynamic simulation until target effluent quality is reached
 - **No Mock Data**: All results come from actual PHREEQC calculations
 - **FastMCP Framework**: Built on FastMCP for high-performance async operations
-- **Three-Tool Architecture**: Separate tools for configuration, simulation, and plotting to prevent import-time delays
+- **Notebook-Based Analysis**: Integrated simulation and visualization through Jupyter notebooks
 
 ## Tools
 
@@ -39,14 +39,14 @@ Performs Direct PHREEQC simulation with:
 - **Smart breakthrough sampling**: ~90% data reduction while preserving critical detail
 - Optional `full_data` parameter for complete resolution
 
-### plot_breakthrough_curves
-Generates breakthrough curve visualizations:
-- Multiple output formats: PNG, HTML, CSV
-- Interactive HTML plots with Plotly (zoom, pan, hover)
-- Static PNG plots with matplotlib (150 DPI)
-- CSV export for external analysis
-- Lazy imports - matplotlib/plotly only loaded when needed
-- Completely optional - simulation can run without plotting
+### run_sac_notebook_analysis (Recommended)
+Executes integrated analysis with Jupyter notebook:
+- Combines simulation and visualization in one tool
+- Generates interactive HTML reports
+- Professional engineering report format
+- Automatic unit conversion and data handling
+- No data transfer issues between tools
+- Requires papermill package
 
 ## Design Philosophy
 
@@ -57,24 +57,22 @@ Generates breakthrough curve visualizations:
 
 ## Performance Architecture
 
-The three-tool architecture eliminates hanging issues that can occur with MCP stdio transport:
+The streamlined architecture ensures fast response times:
 
 | Tool | Load Time | Dependencies | Purpose |
 |------|-----------|--------------|---------|
 | configure_sac_ix | ~0.3s | Basic Python only | Fast vessel sizing |
 | simulate_sac_ix | ~3-4s | PHREEQC engines | Breakthrough simulation |
-| plot_breakthrough_curves | ~0.015s* | Lazy matplotlib/plotly | Optional visualization |
+| run_sac_notebook_analysis | ~0.5s | papermill (optional) | Integrated analysis |
 
-*Plotting tool loads instantly but imports matplotlib/plotly only when actually generating plots.
+### Architecture Benefits:
 
-### Why Three Tools?
+1. **Fast Response**: Configuration tool loads instantly
+2. **Modular Design**: Each tool serves a specific purpose
+3. **Integrated Analysis**: Notebook tool combines simulation and visualization
+4. **No Data Transfer Issues**: Notebook keeps everything in context
 
-1. **No More Hanging**: Configuration tool loads instantly without matplotlib
-2. **Flexibility**: Run simulations without plotting overhead
-3. **Performance**: Each tool only imports what it needs
-4. **Optional Plotting**: Visualization is completely optional
-
-The separation ensures that the MCP handshake completes immediately for all tools, preventing the timeout issues that occurred when matplotlib was imported at module level.
+The separation ensures clean tool boundaries while the notebook integration provides a complete workflow solution.
 
 ## Installation
 
@@ -104,6 +102,41 @@ pip install -r requirements.txt
 4. Configure PHREEQC database path (if needed):
 ```bash
 export PHREEQC_DATABASE_PATH=/path/to/phreeqc/database
+```
+
+## MCP Client Configuration
+
+### Claude Desktop
+
+Add the server to your Claude Desktop configuration file:
+
+**Windows**: `%APPDATA%\Claude\claude_desktop_config.json`
+**macOS**: `~/Library/Application Support/Claude/claude_desktop_config.json`
+**Linux**: `~/.config/Claude/claude_desktop_config.json`
+
+```json
+{
+  "mcpServers": {
+    "ix-design": {
+      "command": "python",
+      "args": ["C:/Users/your-username/mcp-servers/ix-design-mcp/server.py"],
+      "env": {
+        "IX_DESIGN_MCP_ROOT": "C:/Users/your-username/mcp-servers/ix-design-mcp"
+      }
+    }
+  }
+}
+```
+
+**Note**: The `IX_DESIGN_MCP_ROOT` environment variable ensures the server can find notebooks and databases regardless of where the MCP client launches it from.
+
+### Other MCP Clients
+
+For other MCP clients, ensure you set the `IX_DESIGN_MCP_ROOT` environment variable:
+
+```bash
+export IX_DESIGN_MCP_ROOT=/path/to/ix-design-mcp
+python /path/to/ix-design-mcp/server.py
 ```
 
 ## Usage
