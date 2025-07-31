@@ -276,16 +276,21 @@ class DirectPhreeqcEngine:
         for line in lines[1:]:
             if line.strip():
                 values = line.strip().split('\t')
-                if len(values) == len(mapped_headers):
-                    row = {}
-                    for i, header in enumerate(mapped_headers):
+                # Handle cases where values might have fewer entries than headers
+                # (e.g., USER_PUNCH values might be missing)
+                row = {}
+                for i, header in enumerate(mapped_headers):
+                    if i < len(values) and values[i].strip():
                         try:
                             # Try to convert to float
                             row[header] = float(values[i])
                         except ValueError:
                             # Keep as string
                             row[header] = values[i]
-                    data.append(row)
+                    else:
+                        # Missing value - set to None
+                        row[header] = None
+                data.append(row)
         
         return data
     
