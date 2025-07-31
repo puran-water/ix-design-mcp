@@ -95,29 +95,6 @@ The streamlined architecture ensures fast response times:
 
 The separation ensures clean tool boundaries while the notebook integration provides a complete workflow solution.
 
-## Industrial Workflow Integration
-
-This MCP server is designed as a component in larger agentic industrial wastewater treatment workflows:
-
-### Integration Points
-
-1. **Upstream Integration**:
-   - Accepts water quality data from analytical or RO projection tools
-   - Compatible with flow rate outputs from hydraulic design tools
-   - Can receive target specifications from RO membrane protection requirements
-
-2. **Downstream Data Provision**:
-   - **RO Feed Quality**: Softened water composition for RO design
-   - **Waste Streams**: Complete characterization for brine treatment design
-   - **Scheduling Data**: Cycle times for plant-wide coordination
-   - **Chemical Consumption**: Regenerant usage for procurement and storage
-
-3. **Process Control Integration**:
-   - Service time prediction for automated valve sequencing
-   - Regeneration timing for waste handling coordination
-   - Recovery metrics for optimization algorithms
-   - Breakthrough curves for operator training/simulation
-
 ### Key Outputs for Workflow Integration
 
 ```json
@@ -438,6 +415,6 @@ For issues and questions:
 
 - Built on the FastMCP framework for high-performance async operations
 - Uses PHREEQC v3 geochemical simulator from USGS for transport modeling
-- Ion exchange selectivity data from Helfferich, DuPont, and Purolite literature
+- Ion exchange selectivity data from PHREEQC's built-in EXCHANGE_SPECIES definitions
 - Regeneration optimization algorithms based on industrial best practices
 - Designed for integration with WaterTAP/IDAES process modeling frameworks
