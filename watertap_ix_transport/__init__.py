@@ -1,46 +1,19 @@
 """
 WaterTAP Ion Exchange Transport Models
 
-This package provides rigorous ion exchange and degasification models
-for the WaterTAP water treatment modeling framework.
+This package provides PHREEQC-based transport engines for ion exchange modeling.
 
-Models:
-- IonExchangeTransport0D: PHREEQC TRANSPORT-based ion exchange model
-- DegasserTower0D: PHREEQC-based degasser for CO2 removal
+Engines:
+- DirectPhreeqcEngine: Direct PHREEQC TRANSPORT-based engine
+- OptimizedPhreeqcEngine: Performance-optimized version (when available)
 
 Features:
 - Multi-component ion exchange with true thermodynamic modeling
-- Kinetic limitations and fouling effects
-- Acid dosing and CO2 stripping for degasification
-- Full integration with WaterTAP MCAS property packages
+- Direct PHREEQC integration for accurate breakthrough curves
+- Support for various resin types and regenerants
 """
 
-from .ion_exchange_transport_0D import (
-    IonExchangeTransport0D,
-    ResinType,
-    RegenerantChem
-)
-from .ix_flowsheet_builder import (
-    build_ix_flowsheet,
-    add_costing_to_flowsheet
-)
-from .ix_initialization import (
-    initialize_ix_system
-)
-from .production_models import (
-    ProductionDegasser as DegasserTower0D,
-    ProductionPhreeqcEngine,
-    DegasserTower0DPhreeqc
-)
+# Note: This is a minimal package that only contains the transport engines
+# The actual models are implemented in the tools directory
 
-__all__ = [
-    "IonExchangeTransport0D",
-    "ResinType",
-    "RegenerantChem",
-    "build_ix_flowsheet",
-    "initialize_ix_system",
-    "add_costing_to_flowsheet",
-    "DegasserTower0D",
-    "DegasserTower0DPhreeqc",
-    "ProductionPhreeqcEngine"
-]
+__all__ = []
