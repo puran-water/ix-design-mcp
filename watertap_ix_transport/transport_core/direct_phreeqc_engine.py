@@ -51,6 +51,12 @@ class DirectPhreeqcEngine:
         if custom_path and os.path.exists(custom_path):
             return custom_path
         
+        # Check PHREEQC_EXE environment variable first
+        env_phreeqc = os.environ.get('PHREEQC_EXE')
+        if env_phreeqc and os.path.exists(env_phreeqc):
+            logger.info(f"Found PHREEQC from PHREEQC_EXE environment variable: {env_phreeqc}")
+            return env_phreeqc
+        
         # Common locations to search
         search_paths = [
             r"C:\Program Files\USGS\phreeqc\bin\phreeqc.bat",
