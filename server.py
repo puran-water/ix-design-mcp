@@ -492,29 +492,42 @@ async def simulate_sac_ix(simulation_input: str) -> Dict[str, Any]:
         loop = asyncio.get_event_loop()
         
         try:
-            # Add timeout to prevent client timeout issues
+            # Set timeout to be less than typical MCP client timeout
+            # Client usually times out at ~120s, so we timeout at 100s
+            timeout_seconds = int(os.environ.get('MCP_SIMULATION_TIMEOUT_S', '100'))
+            
             result = await asyncio.wait_for(
                 loop.run_in_executor(None, simulate_sac_phreeqc, sim_input),
-                timeout=180  # 3 minutes (well within typical MCP client timeout)
+                timeout=timeout_seconds
             )
             return result.model_dump()
         except asyncio.TimeoutError:
-            # Fallback to fast fixed-dose mode
-            logger.warning("Optimization timeout - falling back to fixed dose mode")
-            sim_input.regeneration_config.mode = "staged_fixed"
-            sim_input.regeneration_config.regenerant_bv = 3.5  # Standard NaCl dose
+            # Don't run another simulation - return timeout error
+            logger.warning(f"SAC simulation timed out after {timeout_seconds} seconds")
             
-            # Run again with fixed mode (much faster)
-            quick_result = await loop.run_in_executor(None, simulate_sac_phreeqc, sim_input)
-            output = quick_result.model_dump()
-            
-            # Add warning about degraded mode
-            if "warnings" not in output:
-                output["warnings"] = []
-            output["warnings"].append("Used fixed regeneration dose due to timeout (optimization would take too long)")
-            output["optimization_skipped"] = True
-            
-            return output
+            # Return structured timeout response
+            return {
+                "status": "timeout",
+                "error": "Simulation timeout",
+                "details": (
+                    f"The simulation exceeded the {timeout_seconds} second timeout. "
+                    f"This typically happens with complex water chemistry or when optimization is enabled. "
+                    f"Consider: (1) Using fixed regeneration mode instead of optimization, "
+                    f"(2) Reducing the number of simulation cells, or "
+                    f"(3) Simplifying the water chemistry."
+                ),
+                "suggestions": {
+                    "use_fixed_mode": {
+                        "regeneration_config": {
+                            "mode": "staged_fixed",
+                            "regenerant_bv": 3.5,
+                            "regeneration_stages": 5
+                        }
+                    },
+                    "reduce_complexity": "Try reducing cells or simplifying water chemistry"
+                },
+                "timeout_seconds": timeout_seconds
+            }
         
     except Exception as e:
         logger.error(f"SAC simulation failed: {e}")

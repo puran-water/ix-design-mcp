@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Dict, Any, Optional, List, Tuple, Literal
 import numpy as np
 from datetime import datetime
-from pydantic import BaseModel, Field, validator
+from pydantic import BaseModel, Field, field_validator
 
 # Get project root with robust approach
 def get_project_root() -> Path:

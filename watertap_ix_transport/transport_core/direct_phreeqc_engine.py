@@ -22,14 +22,19 @@ class DirectPhreeqcEngine:
     Direct interface to PHREEQC executable, bypassing Python wrapper
     """
     
-    def __init__(self, phreeqc_path: Optional[str] = None, keep_temp_files: bool = False):
+    def __init__(self, phreeqc_path: Optional[str] = None, keep_temp_files: bool = False, default_timeout_s: int = 90):
         """
         Initialize direct PHREEQC interface
         
         Args:
             phreeqc_path: Path to PHREEQC executable. If None, searches common locations
             keep_temp_files: If True, don't delete temporary files (for debugging)
+            default_timeout_s: Default timeout for PHREEQC subprocess calls (seconds)
         """
+        # Get timeout from environment or use default
+        self.default_timeout_s = int(os.environ.get('PHREEQC_RUN_TIMEOUT_S', str(default_timeout_s)))
+        logger.info(f"PHREEQC subprocess timeout: {self.default_timeout_s} seconds")
+        
         self.phreeqc_exe = self._find_phreeqc_executable(phreeqc_path)
         if not self.phreeqc_exe:
             raise RuntimeError("PHREEQC executable not found. Please install PHREEQC or provide path.")
@@ -39,91 +44,150 @@ class DirectPhreeqcEngine:
         logger.info(f"Using PHREEQC executable: {self.phreeqc_exe}")
         
         # Database paths
-        self.database_dir = self._find_database_dir()
-        if self.database_dir and os.path.exists(os.path.join(self.database_dir, "phreeqc.dat")):
-            self.default_database = os.path.join(self.database_dir, "phreeqc.dat")
+        self.default_database = self._find_database_path()
+        if self.default_database:
             logger.info(f"Using PHREEQC database: {self.default_database}")
         else:
-            # Fallback based on platform
-            if os.name == 'nt':
-                self.default_database = r"C:\Program Files\USGS\phreeqc-3.8.6-17100-x64\database\phreeqc.dat"
-            else:
-                # Linux/WSL fallback
-                self.default_database = "/home/hvksh/process/phreeqc/share/doc/phreeqc/database/phreeqc.dat"
-            logger.warning(f"Using fallback database: {self.default_database}")
+            raise RuntimeError(
+                "PHREEQC database not found. Please set PHREEQC_DATABASE environment variable "
+                "to the full path of phreeqc.dat"
+            )
         
+    def _is_windows_path(self, path: str) -> bool:
+        """Check if path is a Windows-style path"""
+        if not path:
+            return False
+        # Check for drive letter or common Windows executable extensions
+        return bool(re.match(r'^[A-Za-z]:\\', path)) or path.lower().endswith(('.exe', '.bat', '.cmd'))
+    
+    def _is_posix_path(self, path: str) -> bool:
+        """Check if path is a POSIX-style path"""
+        if not path:
+            return False
+        return path.startswith('/')
+    
+    def _path_exists_compatible(self, path: str) -> bool:
+        """Check if path exists and is compatible with current OS"""
+        if not path:
+            return False
+        
+        # On Windows, reject POSIX paths
+        if os.name == 'nt':
+            if self._is_posix_path(path):
+                logger.debug(f"Rejecting POSIX path on Windows: {path}")
+                return False
+        # On Unix/Linux, reject Windows paths
+        else:
+            if self._is_windows_path(path):
+                logger.debug(f"Rejecting Windows path on Unix: {path}")
+                return False
+        
+        # Check if path actually exists
+        exists = os.path.exists(path)
+        if not exists:
+            logger.debug(f"Path does not exist: {path}")
+        return exists
+    
     def _find_phreeqc_executable(self, custom_path: Optional[str] = None) -> Optional[str]:
-        """Find PHREEQC executable in common locations"""
-        if custom_path:
-            # Try the custom path even if we can't verify it exists (might be WSL path from Windows)
-            if os.path.exists(custom_path) or custom_path.startswith('/'):
-                logger.info(f"Using custom PHREEQC path: {custom_path}")
-                return custom_path
+        """Find PHREEQC executable in common locations (OS-aware)"""
+        candidates = []
         
-        # Check PHREEQC_EXE environment variable first
+        # Add custom path if provided
+        if custom_path:
+            candidates.append(custom_path)
+        
+        # Check PHREEQC_EXE environment variable
         env_phreeqc = os.environ.get('PHREEQC_EXE')
         if env_phreeqc:
-            # Accept environment variable even if we can't verify it exists (WSL paths)
-            logger.info(f"Found PHREEQC from PHREEQC_EXE environment variable: {env_phreeqc}")
-            return env_phreeqc
+            candidates.append(env_phreeqc)
         
-        # Common locations to search
-        search_paths = [
-            r"C:\Program Files\USGS\phreeqc\bin\phreeqc.bat",
-            r"C:\Program Files (x86)\USGS\phreeqc\bin\phreeqc.bat",
-            r"C:\phreeqc\bin\phreeqc.bat",
-            r"C:\Program Files\phreeqc\phreeqc.exe",
-            r"C:\Program Files (x86)\phreeqc\phreeqc.exe",
-            "/usr/local/bin/phreeqc",
-            "/usr/bin/phreeqc",
-            "phreeqc",  # Try PATH
-        ]
+        # Add OS-specific search paths
+        if os.name == 'nt':
+            # Windows paths
+            candidates.extend([
+                r"C:\Program Files\USGS\phreeqc-3.8.6-17100-x64\bin\phreeqc.bat",
+                r"C:\Program Files\USGS\phreeqc-3.8.6-17096-x64\bin\phreeqc.bat",
+                r"C:\Program Files\USGS\phreeqc\bin\phreeqc.bat",
+                r"C:\Program Files (x86)\USGS\phreeqc\bin\phreeqc.bat",
+                r"C:\phreeqc\bin\phreeqc.bat",
+                r"C:\Program Files\phreeqc\phreeqc.exe",
+            ])
+        else:
+            # Unix/Linux paths
+            candidates.extend([
+                "/usr/local/bin/phreeqc",
+                "/usr/bin/phreeqc",
+                "/home/hvksh/process/phreeqc/bin/phreeqc",
+            ])
         
-        for path in search_paths:
-            if os.path.exists(path):
-                return path
+        # Check each candidate
+        for candidate in candidates:
+            if candidate and self._path_exists_compatible(candidate):
+                logger.info(f"Found PHREEQC executable: {candidate}")
+                return candidate
         
-        # Try using 'which' or 'where' command
+        # Try system PATH as last resort
         try:
-            result = subprocess.run(["where" if os.name == 'nt' else "which", "phreeqc"], 
-                                  capture_output=True, text=True)
+            cmd = "where" if os.name == 'nt' else "which"
+            result = subprocess.run([cmd, "phreeqc"], capture_output=True, text=True, timeout=5)
             if result.returncode == 0:
-                return result.stdout.strip()
-        except (subprocess.SubprocessError, FileNotFoundError) as e:
-            logger.debug(f"Failed to find phreeqc via system path: {e}")
-            pass
+                path = result.stdout.strip()
+                if self._path_exists_compatible(path):
+                    logger.info(f"Found PHREEQC in PATH: {path}")
+                    return path
+        except (subprocess.SubprocessError, FileNotFoundError, subprocess.TimeoutExpired) as e:
+            logger.debug(f"Failed to find phreeqc via {cmd}: {e}")
         
+        # No valid executable found
+        logger.error(
+            f"PHREEQC executable not found for {os.name} platform. "
+            f"Please set PHREEQC_EXE environment variable to a valid executable path."
+        )
         return None
     
-    def _find_database_dir(self) -> str:
-        """Find PHREEQC database directory"""
-        # Check environment variable first
+    def _find_database_path(self) -> Optional[str]:
+        """Find PHREEQC database file (OS-aware)"""
+        candidates = []
+        
+        # Check PHREEQC_DATABASE environment variable first
         env_database = os.environ.get('PHREEQC_DATABASE')
         if env_database:
-            # Accept environment variable even if we can't verify it exists (WSL paths)
-            logger.info(f"Found PHREEQC database from PHREEQC_DATABASE environment variable: {env_database}")
-            return os.path.dirname(env_database)
+            candidates.append(env_database)
         
-        # Common database locations
-        search_dirs = [
-            # Add the actual WSL installation path
-            "/home/hvksh/process/phreeqc/share/doc/phreeqc/database",
-            r"C:\Program Files\USGS\phreeqc\database",
-            r"C:\Program Files (x86)\USGS\phreeqc\database",
-            r"C:\phreeqc\database",
-            "/usr/local/share/phreeqc/database",
-            "/usr/share/phreeqc/database",
-            os.path.dirname(self.phreeqc_exe),  # Same dir as executable
-        ]
+        # Add OS-specific database paths
+        if os.name == 'nt':
+            # Windows paths
+            candidates.extend([
+                r"C:\Program Files\USGS\phreeqc-3.8.6-17100-x64\database\phreeqc.dat",
+                r"C:\Program Files\USGS\phreeqc-3.8.6-17096-x64\database\phreeqc.dat",
+                r"C:\Program Files\USGS\phreeqc\database\phreeqc.dat",
+                r"C:\Program Files (x86)\USGS\phreeqc\database\phreeqc.dat",
+                r"C:\phreeqc\database\phreeqc.dat",
+            ])
+            # Try relative to executable if found
+            if self.phreeqc_exe:
+                exe_dir = os.path.dirname(self.phreeqc_exe)
+                candidates.append(os.path.join(exe_dir, "..", "database", "phreeqc.dat"))
+        else:
+            # Unix/Linux paths
+            candidates.extend([
+                "/usr/local/share/phreeqc/database/phreeqc.dat",
+                "/usr/share/phreeqc/database/phreeqc.dat",
+                "/home/hvksh/process/phreeqc/share/doc/phreeqc/database/phreeqc.dat",
+            ])
         
-        for dir_path in search_dirs:
-            if os.path.exists(dir_path) and os.path.exists(os.path.join(dir_path, "phreeqc.dat")):
-                logger.info(f"Found PHREEQC database directory: {dir_path}")
-                return dir_path
+        # Check each candidate
+        for candidate in candidates:
+            if candidate and self._path_exists_compatible(candidate):
+                logger.info(f"Found PHREEQC database: {candidate}")
+                return candidate
         
-        # Default to executable directory
-        logger.warning(f"PHREEQC database not found in standard locations, defaulting to executable directory: {os.path.dirname(self.phreeqc_exe)}")
-        return os.path.dirname(self.phreeqc_exe)
+        # No valid database found
+        logger.error(
+            f"PHREEQC database not found for {os.name} platform. "
+            f"Please set PHREEQC_DATABASE environment variable to the full path of phreeqc.dat"
+        )
+        return None
     
     def __enter__(self):
         """Context manager entry - returns self for use in 'with' statements."""
@@ -147,13 +211,14 @@ class DirectPhreeqcEngine:
                 logger.warning(f"Failed to clean up temp directory {temp_dir}: {e}")
         self.temp_dirs.clear()
     
-    def run_phreeqc(self, input_string: str, database: Optional[str] = None) -> Tuple[str, str]:
+    def run_phreeqc(self, input_string: str, database: Optional[str] = None, timeout_s: Optional[int] = None) -> Tuple[str, str]:
         """
         Run PHREEQC with given input string
         
         Args:
             input_string: PHREEQC input commands
             database: Path to database file (uses default if None)
+            timeout_s: Timeout in seconds (uses default if None)
             
         Returns:
             Tuple of (output_string, selected_output_string)
@@ -162,16 +227,15 @@ class DirectPhreeqcEngine:
         if database is None:
             database = self.default_database
         
-        # Validate database exists
-        if not os.path.exists(database):
+        # Validate database exists and is compatible with OS
+        if not self._path_exists_compatible(database):
             raise FileNotFoundError(
-                f"PHREEQC database not found: {database}\n"
-                f"Please ensure PHREEQC is properly installed or set PHREEQC_DATABASE environment variable."
+                f"PHREEQC database not found or incompatible with {os.name}: {database}\n"
+                f"Please set PHREEQC_DATABASE environment variable to a valid database path."
             )
         
-        # Create temporary directory and files
+        # Create temporary directory
         temp_dir = tempfile.mkdtemp(prefix='phreeqc_')
-        # Track for cleanup
         self.temp_dirs.append(temp_dir)
         
         # Write input file with UTF-8 encoding
@@ -179,19 +243,16 @@ class DirectPhreeqcEngine:
         with open(input_path, 'w', encoding='utf-8') as f:
             f.write(input_string)
         
-        # Log input for debugging
-        logger.debug("PHREEQC input:")
-        for i, line in enumerate(input_string.split('\n')[:50]):  # First 50 lines
+        # Log input for debugging (first 20 lines only)
+        logger.debug("PHREEQC input (first 20 lines):")
+        for i, line in enumerate(input_string.split('\n')[:20]):
             logger.debug(f"  {i+1:3d}: {line}")
         
         output_path = os.path.join(temp_dir, 'output.pqo')
         
-        # PHREEQC will create selected output based on SELECTED_OUTPUT filename
-        # We need to check what filename was specified in the input
+        # Determine selected output filename
         selected_filename = 'transport.sel'  # Default
         if '-file' in input_string:
-            # Extract filename from SELECTED_OUTPUT block
-            import re
             match = re.search(r'-file\s+(\S+)', input_string)
             if match:
                 selected_filename = match.group(1)
@@ -199,60 +260,79 @@ class DirectPhreeqcEngine:
         selected_path = os.path.join(temp_dir, selected_filename)
         
         try:
-            # Change to temp directory and run PHREEQC
-            # This ensures PHREEQC creates files in the right place
-            original_dir = os.getcwd()
-            os.chdir(temp_dir)
+            # Prepare command based on OS
+            # IMPORTANT: Never use os.chdir() - use cwd parameter instead
+            if os.name == 'nt' and self.phreeqc_exe.lower().endswith('.bat'):
+                # Windows .bat file - use shell=True with proper quoting
+                cmd = f'"{self.phreeqc_exe}" "{input_path}" "{output_path}" "{database}"'
+                shell = True
+            else:
+                # Unix or Windows .exe - use list format
+                cmd = [self.phreeqc_exe, input_path, output_path, database]
+                shell = False
             
-            try:
-                # Run PHREEQC with relative paths
-                cmd = [self.phreeqc_exe, 'input.pqi', 'output.pqo', database]
-                
-                logger.debug(f"Running in {temp_dir}: {' '.join(cmd)}")
-                logger.debug(f"Input file exists: {os.path.exists('input.pqi')}")
-                logger.debug(f"Database exists: {os.path.exists(database)}")
-                
-                # Use shell=True on Windows for .bat files
-                shell = os.name == 'nt' and self.phreeqc_exe.endswith('.bat')
-                # Use encoding='latin-1' to handle degree symbols and other CP1252 characters
-                result = subprocess.run(cmd, capture_output=True, text=True, shell=shell, encoding='latin-1')
-            finally:
-                os.chdir(original_dir)
+            # Determine timeout
+            run_timeout = timeout_s or self.default_timeout_s
+            
+            logger.debug(f"Running PHREEQC with timeout={run_timeout}s in {temp_dir}")
+            logger.debug(f"Command: {cmd if isinstance(cmd, str) else ' '.join(cmd)}")
+            
+            # Run PHREEQC with cwd set to temp directory (no os.chdir!)
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                shell=shell,
+                cwd=temp_dir,  # Critical: use cwd instead of os.chdir()
+                timeout=run_timeout,
+                encoding='latin-1' if os.name == 'nt' else 'utf-8'  # Use latin-1 on Windows
+            )
             
             logger.debug(f"Return code: {result.returncode}")
             if result.stdout:
-                logger.debug(f"Stdout: {result.stdout[:200]}")
+                logger.debug(f"Stdout (first 200 chars): {result.stdout[:200]}")
             if result.stderr:
-                logger.debug(f"Stderr: {result.stderr[:200]}")
+                logger.debug(f"Stderr (first 200 chars): {result.stderr[:200]}")
             
             if result.returncode != 0:
-                logger.error(f"PHREEQC error: {result.stderr}")
-                raise RuntimeError(f"PHREEQC failed: {result.stderr}")
+                logger.error(f"PHREEQC failed with return code {result.returncode}")
+                logger.error(f"Stderr: {result.stderr}")
+                raise RuntimeError(f"PHREEQC failed (code {result.returncode}): {result.stderr}")
             
             # Check what files were created
-            logger.debug(f"Files in temp dir after PHREEQC:")
+            logger.debug(f"Files created in temp directory:")
             for f in os.listdir(temp_dir):
-                logger.debug(f"  - {f} ({os.path.getsize(os.path.join(temp_dir, f))} bytes)")
+                file_path = os.path.join(temp_dir, f)
+                if os.path.isfile(file_path):
+                    logger.debug(f"  - {f} ({os.path.getsize(file_path)} bytes)")
             
-            # Read output with latin-1 encoding to match PHREEQC output
+            # Read output files with appropriate encoding
+            encoding = 'latin-1' if os.name == 'nt' else 'utf-8'
+            
             output_string = ""
             if os.path.exists(output_path):
-                with open(output_path, 'r', encoding='latin-1', errors='ignore') as f:
+                with open(output_path, 'r', encoding=encoding, errors='ignore') as f:
                     output_string = f.read()
-                logger.debug(f"Output file size: {len(output_string)} chars")
+                logger.debug(f"Output file read: {len(output_string)} characters")
             else:
                 logger.warning(f"Output file not found: {output_path}")
             
-            # Read selected output with latin-1 encoding
             selected_string = ""
             if os.path.exists(selected_path):
-                with open(selected_path, 'r', encoding='latin-1', errors='ignore') as f:
+                with open(selected_path, 'r', encoding=encoding, errors='ignore') as f:
                     selected_string = f.read()
-                logger.debug(f"Selected output found: {len(selected_string)} chars")
+                logger.debug(f"Selected output read: {len(selected_string)} characters")
             else:
-                logger.warning(f"No selected output found at {selected_path}")
+                logger.warning(f"Selected output file not found: {selected_path}")
             
             return output_string, selected_string
+        
+        except subprocess.TimeoutExpired:
+            logger.error(f"PHREEQC subprocess timed out after {run_timeout} seconds")
+            raise RuntimeError(
+                f"PHREEQC simulation timed out after {run_timeout} seconds. "
+                f"Consider simplifying the simulation or increasing PHREEQC_RUN_TIMEOUT_S."
+            )
             
         finally:
             # Clean up temporary files (unless debugging)
@@ -449,7 +529,7 @@ class DirectPhreeqcEngine:
 
 # Singleton pattern for PHREEQC engine
 @functools.lru_cache(maxsize=1)
-def get_phreeqc_engine(keep_temp_files: bool = False) -> DirectPhreeqcEngine:
+def get_phreeqc_engine(keep_temp_files: bool = False, default_timeout_s: int = 90) -> DirectPhreeqcEngine:
     """
     Get singleton PHREEQC engine instance.
     
@@ -458,6 +538,7 @@ def get_phreeqc_engine(keep_temp_files: bool = False) -> DirectPhreeqcEngine:
     
     Args:
         keep_temp_files: If True, don't delete temporary files (for debugging)
+        default_timeout_s: Default timeout for PHREEQC subprocess calls
         
     Returns:
         Singleton DirectPhreeqcEngine instance
@@ -467,10 +548,11 @@ def get_phreeqc_engine(keep_temp_files: bool = False) -> DirectPhreeqcEngine:
         from watertap_ix_transport.transport_core.tools.core_config import CONFIG
         phreeqc_path = str(CONFIG.get_phreeqc_exe())
     except ImportError:
-        # Fallback if core_config not available
+        # Fallback - let DirectPhreeqcEngine find it
         phreeqc_path = None
     
     return DirectPhreeqcEngine(
         phreeqc_path=phreeqc_path,
-        keep_temp_files=keep_temp_files
+        keep_temp_files=keep_temp_files,
+        default_timeout_s=default_timeout_s
     )
