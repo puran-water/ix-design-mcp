@@ -347,6 +347,10 @@ class _IXDirectPhreeqcSimulation:
                 helper = TempIXHelper()
             
             # Calculate feed concentration in eq/L
+            # CORRECTED: Resin capacity is per liter of BED VOLUME
+            # Define this before MTZ calculation to avoid undefined variable error
+            resin_capacity_eq_L = vessel_config.get('resin_capacity_eq_L', CONFIG.RESIN_CAPACITY_EQ_L)  # eq/L bed
+            
             feed_hardness_eq_l = (
                 water.ca_mg_l / CONFIG.CA_EQUIV_WEIGHT +
                 water.mg_mg_l / CONFIG.MG_EQUIV_WEIGHT
@@ -367,9 +371,9 @@ class _IXDirectPhreeqcSimulation:
             # Store MTZ info for later reporting
             vessel_config['mtz_length_m'] = mtz_length
             vessel_config['effective_bed_depth_m'] = effective_bed_depth
-        
-        # CORRECTED: Resin capacity is per liter of BED VOLUME
-        resin_capacity_eq_L = vessel_config.get('resin_capacity_eq_L', CONFIG.RESIN_CAPACITY_EQ_L)  # eq/L bed
+        else:
+            # Define resin capacity even when MTZ modeling is disabled
+            resin_capacity_eq_L = vessel_config.get('resin_capacity_eq_L', CONFIG.RESIN_CAPACITY_EQ_L)  # eq/L bed
         
         # Apply capacity degradation if enabled
         if enable_enhancements and capacity_factor < 1.0:

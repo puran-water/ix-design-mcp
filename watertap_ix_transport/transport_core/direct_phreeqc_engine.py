@@ -87,8 +87,16 @@ class DirectPhreeqcEngine:
     
     def _find_database_dir(self) -> str:
         """Find PHREEQC database directory"""
+        # Check environment variable first
+        env_database = os.environ.get('PHREEQC_DATABASE')
+        if env_database and os.path.exists(env_database):
+            logger.info(f"Found PHREEQC database from PHREEQC_DATABASE environment variable: {env_database}")
+            return os.path.dirname(env_database)
+        
         # Common database locations
         search_dirs = [
+            # Add the actual WSL installation path
+            "/home/hvksh/process/phreeqc/share/doc/phreeqc/database",
             r"C:\Program Files\USGS\phreeqc\database",
             r"C:\Program Files (x86)\USGS\phreeqc\database",
             r"C:\phreeqc\database",
@@ -99,9 +107,11 @@ class DirectPhreeqcEngine:
         
         for dir_path in search_dirs:
             if os.path.exists(dir_path) and os.path.exists(os.path.join(dir_path, "phreeqc.dat")):
+                logger.info(f"Found PHREEQC database directory: {dir_path}")
                 return dir_path
         
         # Default to executable directory
+        logger.warning(f"PHREEQC database not found in standard locations, defaulting to executable directory: {os.path.dirname(self.phreeqc_exe)}")
         return os.path.dirname(self.phreeqc_exe)
     
     def __enter__(self):
@@ -140,6 +150,13 @@ class DirectPhreeqcEngine:
         # Use default database if none specified
         if database is None:
             database = self.default_database
+        
+        # Validate database exists
+        if not os.path.exists(database):
+            raise FileNotFoundError(
+                f"PHREEQC database not found: {database}\n"
+                f"Please ensure PHREEQC is properly installed or set PHREEQC_DATABASE environment variable."
+            )
         
         # Create temporary directory and files
         temp_dir = tempfile.mkdtemp(prefix='phreeqc_')
