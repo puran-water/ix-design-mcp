@@ -136,10 +136,10 @@ def configure_wac_vessel(input_data: WACConfigurationInput) -> WACConfigurationO
     with open(db_path, 'r') as f:
         resin_db = json.load(f)
     
-    if resin_type not in resin_db:
+    if resin_type not in resin_db.get("resin_types", {}):
         raise ValueError(f"Resin type {resin_type} not found in database")
     
-    resin_params = resin_db[resin_type]
+    resin_params = resin_db["resin_types"][resin_type]
     
     # Water chemistry analysis
     total_hardness = water.ca_mg_l + water.mg_mg_l * (CONFIG.CA_EQUIV_WEIGHT / CONFIG.MG_EQUIV_WEIGHT)
