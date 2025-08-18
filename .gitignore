@@ -56,6 +56,9 @@ htmlcov/
 .env
 .env.local
 
+# MCP configuration (user-specific)
+.mcp.json
+
 # Database
 *.db
 *.sqlite
