@@ -214,7 +214,8 @@ class DirectPhreeqcEngine:
                 
                 # Use shell=True on Windows for .bat files
                 shell = os.name == 'nt' and self.phreeqc_exe.endswith('.bat')
-                result = subprocess.run(cmd, capture_output=True, text=True, shell=shell)
+                # Use encoding='latin-1' to handle degree symbols and other CP1252 characters
+                result = subprocess.run(cmd, capture_output=True, text=True, shell=shell, encoding='latin-1')
             finally:
                 os.chdir(original_dir)
             
@@ -233,19 +234,19 @@ class DirectPhreeqcEngine:
             for f in os.listdir(temp_dir):
                 logger.debug(f"  - {f} ({os.path.getsize(os.path.join(temp_dir, f))} bytes)")
             
-            # Read output
+            # Read output with latin-1 encoding to match PHREEQC output
             output_string = ""
             if os.path.exists(output_path):
-                with open(output_path, 'r', errors='ignore') as f:
+                with open(output_path, 'r', encoding='latin-1', errors='ignore') as f:
                     output_string = f.read()
                 logger.debug(f"Output file size: {len(output_string)} chars")
             else:
                 logger.warning(f"Output file not found: {output_path}")
             
-            # Read selected output
+            # Read selected output with latin-1 encoding
             selected_string = ""
             if os.path.exists(selected_path):
-                with open(selected_path, 'r', errors='ignore') as f:
+                with open(selected_path, 'r', encoding='latin-1', errors='ignore') as f:
                     selected_string = f.read()
                 logger.debug(f"Selected output found: {len(selected_string)} chars")
             else:
