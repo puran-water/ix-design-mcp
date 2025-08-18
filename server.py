@@ -16,8 +16,12 @@ from pathlib import Path
 try:
     from dotenv import load_dotenv
     load_dotenv()
+    # Debug: Log that .env was loaded
+    if os.path.exists('.env'):
+        print(f"Loaded .env file from {os.path.abspath('.env')}", file=sys.stderr)
 except ImportError:
     # dotenv not installed, continue without it
+    print("python-dotenv not installed, skipping .env loading", file=sys.stderr)
     pass
 
 # Set required environment variables
@@ -56,6 +60,14 @@ logging.basicConfig(
     ]
 )
 logger = logging.getLogger(__name__)
+
+# Debug: Log PHREEQC_EXE environment variable
+phreeqc_exe = os.environ.get('PHREEQC_EXE', 'NOT SET')
+logger.info(f"PHREEQC_EXE environment variable: {phreeqc_exe}")
+if phreeqc_exe != 'NOT SET' and os.path.exists(phreeqc_exe):
+    logger.info(f"PHREEQC executable found at: {phreeqc_exe}")
+else:
+    logger.warning(f"PHREEQC executable not found at: {phreeqc_exe}")
 
 # Import SAC tools at module level to prevent hanging on first call
 logger.info("Starting imports of SAC tools...")
