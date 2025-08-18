@@ -50,6 +50,7 @@ from .sac_configuration import (
 
 # Import centralized configuration
 from .core_config import CONFIG
+from .base_ix_simulation import BaseIXSimulation
 
 logger = logging.getLogger(__name__)
 
@@ -59,7 +60,7 @@ class RegenerationConfig(BaseModel):
     enabled: bool = Field(True, description="Always enabled for full cycle simulation")
     
     # Core parameters with smart defaults
-    regenerant_type: Literal["NaCl", "HCl", "H2SO4"] = Field("NaCl", description="Type of regenerant chemical (NaCl for SAC)")
+    regenerant_type: Literal["NaCl", "HCl", "H2SO4", "NaOH"] = Field("NaCl", description="Type of regenerant chemical")
     concentration_percent: float = Field(10.0, description="Regenerant concentration (weight %)", ge=5.0, le=15.0)
     flow_rate_bv_hr: float = Field(2.5, description="Regeneration flow rate (BV/hr)", ge=1.0, le=5.0)
     
@@ -283,7 +284,9 @@ class _IXDirectPhreeqcSimulation:
         water: SACWaterComposition,
         vessel_config: Dict[str, Any],
         max_bv: int = 100,
-        cells: int = 10
+        cells: int = 10,
+        enable_enhancements: bool = True,
+        capacity_factor: float = 1.0
     ) -> Tuple[np.ndarray, Dict[str, np.ndarray]]:
         """
         Run SAC simulation and return breakthrough curves.
@@ -315,8 +318,60 @@ class _IXDirectPhreeqcSimulation:
         water_per_cell_kg = pore_volume_L / cells
         cell_length_m = bed_depth_m / cells
         
+        # Calculate MTZ if enabled
+        effective_bed_depth = bed_depth_m
+        if enable_enhancements and CONFIG.ENABLE_MTZ_MODELING:
+            # Calculate linear velocity
+            flow_rate_m3_hr = water.flow_m3_hr
+            area_m2 = np.pi * (diameter_m / 2) ** 2
+            linear_velocity_m_hr = flow_rate_m3_hr / area_m2
+            
+            # Use helper for MTZ calculation
+            if 'helper' not in locals():
+                class TempIXHelper(BaseIXSimulation):
+                    def run_simulation(self, input_data):
+                        pass
+                helper = TempIXHelper()
+            
+            # Calculate feed concentration in eq/L
+            feed_hardness_eq_l = (
+                water.ca_mg_l / CONFIG.CA_EQUIV_WEIGHT +
+                water.mg_mg_l / CONFIG.MG_EQUIV_WEIGHT
+            ) / 1000  # Convert meq/L to eq/L
+            
+            mtz_length = helper.calculate_mtz_length(
+                linear_velocity_m_hr,
+                CONFIG.DEFAULT_PARTICLE_DIAMETER_MM,
+                bed_depth_m,
+                CONFIG.DEFAULT_DIFFUSION_COEFFICIENT,
+                resin_capacity_eq_L,
+                feed_hardness_eq_l
+            )
+            
+            effective_bed_depth = bed_depth_m - mtz_length
+            logger.info(f"MTZ length: {mtz_length:.2f} m, Effective bed depth: {effective_bed_depth:.2f} m")
+            
+            # Store MTZ info for later reporting
+            vessel_config['mtz_length_m'] = mtz_length
+            vessel_config['effective_bed_depth_m'] = effective_bed_depth
+        
         # CORRECTED: Resin capacity is per liter of BED VOLUME
         resin_capacity_eq_L = vessel_config.get('resin_capacity_eq_L', CONFIG.RESIN_CAPACITY_EQ_L)  # eq/L bed
+        
+        # Apply capacity degradation if enabled
+        if enable_enhancements and capacity_factor < 1.0:
+            # Create a temporary helper instance (doesn't need to be a full simulation)
+            class TempIXHelper(BaseIXSimulation):
+                def run_simulation(self, input_data):
+                    pass  # Not needed for utility methods
+            
+            helper = TempIXHelper()
+            effective_capacity = helper.apply_capacity_degradation(
+                resin_capacity_eq_L, capacity_factor
+            )
+            logger.info(f"Applied capacity factor {capacity_factor}: {resin_capacity_eq_L} -> {effective_capacity} eq/L")
+            resin_capacity_eq_L = effective_capacity
+        
         total_capacity_eq = resin_capacity_eq_L * bed_volume_L  # Convert L to m³
         exchange_per_kg_water = total_capacity_eq / cells / water_per_cell_kg
         
@@ -345,6 +400,37 @@ class _IXDirectPhreeqcSimulation:
         # Get database path from centralized config
         db_path = CONFIG.get_phreeqc_database()
         
+        # Generate enhanced exchange species if enabled
+        exchange_species_block = ""
+        if enable_enhancements:
+            # Use helper to generate enhanced exchange species
+            if 'helper' not in locals():
+                class TempIXHelper(BaseIXSimulation):
+                    def run_simulation(self, input_data):
+                        pass
+                helper = TempIXHelper()
+            
+            # Convert water composition to dict format
+            water_dict = {
+                'ca_mg_l': ca_mg_L,
+                'mg_mg_l': mg_mg_L,
+                'na_mg_l': na_mg_L,
+                'k_mg_l': k_mg_L,
+                'cl_mg_l': cl_mg_L,
+                'hco3_mg_l': hco3_mg_L,
+                'so4_mg_l': so4_mg_L,
+                'nh4_mg_l': nh4_mg_L,
+                'temperature_celsius': water.temperature_celsius
+            }
+            
+            exchange_species_block = helper.generate_enhanced_exchange_species(
+                'SAC', water_dict, water.temperature_celsius, capacity_factor,
+                enable_ionic_strength=CONFIG.ENABLE_IONIC_STRENGTH_CORRECTION,
+                enable_temperature=CONFIG.ENABLE_TEMPERATURE_CORRECTION
+            )
+        else:
+            exchange_species_block = "# Exchange species loaded from database"
+        
         # Build PHREEQC input with all MCAS ions
         phreeqc_input = f"""DATABASE {db_path}
 TITLE SAC Simulation - Target Hardness Breakthrough
@@ -354,7 +440,7 @@ PHASES
     H+ = H+
     log_k 0.0
 
-# Exchange species loaded from database
+{exchange_species_block}
 
 SOLUTION 0  # Feed water
     units     mg/L
