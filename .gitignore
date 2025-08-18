@@ -154,6 +154,7 @@ databases/*.db
 databases/*.dat
 databases/*.phr
 !databases/.gitkeep
+!databases/resin_parameters.json
 
 # Examples to exclude
 examples/ix_example.py
