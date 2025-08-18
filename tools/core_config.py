@@ -8,7 +8,7 @@ All physical constants, design parameters, and paths are defined here.
 from dataclasses import dataclass
 from pathlib import Path
 import os
-from typing import Optional
+from typing import Optional, Dict
 import logging
 
 logger = logging.getLogger(__name__)
@@ -64,6 +64,74 @@ class CoreConfig:
     PO4_EQUIV_WEIGHT: float = 31.67 # PO4-3: 94.97/3
     F_EQUIV_WEIGHT: float = 19.0    # F-: 19.00/1
     OH_EQUIV_WEIGHT: float = 17.0   # OH-: 17.01/1
+    
+    # WAC-specific constants
+    ALKALINITY_EQUIV_WEIGHT: float = 50.04  # Alkalinity as CaCO3: 100.09/2
+    H_EQUIV_WEIGHT: float = 1.008   # H+: 1.008/1
+    CO2_MW: float = 44.01           # CO2 molecular weight
+    CACO3_MW: float = 100.09        # CaCO3 molecular weight for alkalinity
+    
+    # WAC resin parameters
+    WAC_PKA: float = 4.8            # pKa for carboxylic acid groups
+    WAC_NA_TOTAL_CAPACITY: float = 4.7  # Total capacity in eq/L
+    WAC_H_TOTAL_CAPACITY: float = 4.7   # Total capacity in eq/L
+    WAC_NA_WORKING_CAPACITY: float = 1.8  # Working capacity in eq/L
+    WAC_H_WORKING_CAPACITY: float = 1.6   # Working capacity in eq/L
+    
+    # WAC selectivity coefficients (log K values)
+    WAC_LOGK_CA_NA: float = 1.30    # Ca/Na selectivity for WAC
+    WAC_LOGK_MG_NA: float = 1.10    # Mg/Na selectivity for WAC
+    WAC_LOGK_K_NA: float = 0.25     # K/Na selectivity for WAC
+    WAC_LOGK_H_NA: float = 3.0      # H/Na selectivity for WAC (H+ >> all other cations)
+    
+    # WAC H-form selectivity (HX is reference, log_k = 0.0)
+    WAC_LOGK_CA_H: float = 2.0      # Ca+2 + 2HX = CaX2 + 2H+
+    WAC_LOGK_MG_H: float = 1.8      # Mg+2 + 2HX = MgX2 + 2H+
+    WAC_LOGK_NA_H: float = 0.5      # Na+ + HX = NaX + H+
+    WAC_LOGK_K_H: float = 0.7       # K+ + HX = KX + H+
+    
+    # WAC regeneration parameters
+    WAC_ACID_DOSE_G_L: float = 100.0   # Acid dose for WAC regeneration (g/L resin)
+    WAC_CAUSTIC_DOSE_G_L: float = 80.0 # Caustic dose for Na-form conversion (g/L resin)
+    WAC_RINSE_BV: float = 5.0          # Total rinse volume for WAC (BV)
+    
+    # WAC performance thresholds
+    WAC_MIN_ACTIVE_SITES_PERCENT: float = 10.0  # Minimum active sites for H-form WAC
+    WAC_ALKALINITY_LEAK_MG_L: float = 5.0       # Alkalinity leak threshold (mg/L as CaCO3)
+    
+    # Universal Enhancement Parameters
+    
+    # Enhancement control flags
+    ENABLE_IONIC_STRENGTH_CORRECTION: bool = True
+    ENABLE_TEMPERATURE_CORRECTION: bool = True
+    ENABLE_MTZ_MODELING: bool = True
+    ENABLE_CAPACITY_DEGRADATION: bool = True
+    ENABLE_H_FORM_LEAKAGE: bool = True
+    ENABLE_CO2_TRACKING: bool = True
+    
+    # Ionic strength parameters
+    DAVIES_EQUATION_A: float = 0.51  # Davies equation constant at 25°C
+    
+    # MTZ (Mass Transfer Zone) parameters
+    DEFAULT_PARTICLE_DIAMETER_MM: float = 0.65  # Standard resin bead size
+    DEFAULT_DIFFUSION_COEFFICIENT: float = 1e-9  # m²/s for ions in resin
+    MTZ_EMPIRICAL_FACTOR: float = 5.0  # Empirical factor for MTZ length (3-10)
+    MAX_MTZ_FRACTION: float = 0.3  # Maximum MTZ as fraction of bed depth
+    
+    # H-form leakage parameters
+    BASE_NA_LEAKAGE_PERCENT: float = 2.0  # Base Na+ leakage for fresh H-form resin
+    BASE_K_LEAKAGE_PERCENT: float = 1.5   # Base K+ leakage for fresh H-form resin
+    LEAKAGE_EXHAUSTION_FACTOR: float = 3.0  # Leakage multiplier at full exhaustion
+    
+    # Capacity degradation parameters
+    DEFAULT_CAPACITY_FACTOR: float = 1.0  # Fresh resin = 1.0, fouled < 1.0
+    DEGRADATION_RATE_PER_CYCLE: float = 0.001  # 0.1% capacity loss per cycle
+    MIN_CAPACITY_FACTOR: float = 0.5  # Minimum capacity after degradation
+    
+    # CO2 generation parameters
+    CO2_HENRY_CONSTANT_25C: float = 29.4  # Henry's constant at 25°C (atm·L/mol)
+    CO2_TEMP_COEFFICIENT: float = -2400  # Temperature dependency factor (K)
+    CO2_STRIPPING_THRESHOLD: float = 80.0  # % saturation requiring stripping
     
     # Regeneration parameters
     REGENERANT_DOSE_KG_M3: float = 125.0  # NaCl dose (kg/m³ bed volume)
@@ -161,6 +229,38 @@ class CoreConfig:
             raise ValueError(f"Unknown ion: {ion}. Known ions: {list(equiv_weights.keys())}")
         
         return equiv_weights[ion]
+    
+    def get_ion_size_parameters(self) -> Dict[str, float]:
+        """Get ion size parameters for Davies equation calculations."""
+        return {
+            'Ca': 6.0,   # Hydrated Ca2+ radius in Angstroms
+            'Mg': 8.0,   # Hydrated Mg2+ radius in Angstroms
+            'Na': 4.5,   # Hydrated Na+ radius in Angstroms
+            'K': 3.5,    # Hydrated K+ radius in Angstroms
+            'H': 9.0,    # Hydrated H+ (H3O+) radius in Angstroms
+            'NH4': 3.3,  # NH4+ radius in Angstroms
+            'Cl': 3.3,   # Cl- radius in Angstroms
+            'SO4': 4.0,  # SO42- radius in Angstroms
+            'HCO3': 4.5, # HCO3- radius in Angstroms
+        }
+    
+    def get_exchange_enthalpies(self) -> Dict[str, float]:
+        """
+        Get standard enthalpies of exchange for temperature correction.
+        
+        Negative values = exothermic (selectivity decreases with temperature)
+        Positive values = endothermic (selectivity increases with temperature)
+        """
+        return {
+            'Ca_Na': -8.0,   # Ca2+ replacing Na+ on resin
+            'Mg_Na': -6.0,   # Mg2+ replacing Na+ on resin
+            'K_Na': -2.0,    # K+ replacing Na+ on resin
+            'H_Na': -12.0,   # H+ replacing Na+ on resin (strongly exothermic)
+            'Ca_H': 4.0,     # Ca2+ replacing H+ on resin (endothermic)
+            'Mg_H': 3.0,     # Mg2+ replacing H+ on resin (endothermic)
+            'Na_H': 3.0,     # Na+ replacing H+ on resin (endothermic)
+            'K_H': 2.0,      # K+ replacing H+ on resin (endothermic)
+        }
     
     def get_merged_database_path(self) -> Path:
         """Get path to merged database, creating if needed"""
