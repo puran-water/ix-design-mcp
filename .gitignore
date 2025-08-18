@@ -144,9 +144,9 @@ tools/trace_metals_model.py
 tools/ix_simulation_watertap.py
 
 # Keep only essential directories
-watertap_ix_transport/
-!watertap_ix_transport/transport_core/optimized_phreeqc_engine.py
-!watertap_ix_transport/transport_core/__init__.py
+# watertap_ix_transport/ directory is now tracked - only ignore pycache
+watertap_ix_transport/__pycache__/
+watertap_ix_transport/**/__pycache__/
 utils/
 config/
 databases/
