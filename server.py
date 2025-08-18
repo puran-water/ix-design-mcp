@@ -67,7 +67,14 @@ logger.info(f"Imported sac_configuration in {time.time() - import_start:.2f}s")
 from tools.sac_simulation import simulate_sac_phreeqc, SACSimulationInput
 logger.info(f"Imported sac_simulation in {time.time() - import_start:.2f}s total")
 
-logger.info(f"All SAC tools imported in {time.time() - import_start:.2f}s total")
+# Import WAC tools
+from tools.wac_configuration import configure_wac_vessel, WACConfigurationInput
+logger.info(f"Imported wac_configuration in {time.time() - import_start:.2f}s total")
+
+from tools.wac_simulation import simulate_wac_system, WACSimulationInput
+logger.info(f"Imported wac_simulation in {time.time() - import_start:.2f}s total")
+
+logger.info(f"All IX tools imported in {time.time() - import_start:.2f}s total")
 
 # Import notebook runner for integrated analysis
 try:
@@ -485,6 +492,111 @@ async def simulate_sac_ix(simulation_input: str) -> Dict[str, Any]:
         }
 
 # Add notebook-based analysis tool if available
+# Add WAC configuration tool
+@mcp.tool(
+    description="""Configure WAC ion exchange vessel for RO pretreatment.
+    
+    Sizes WAC vessels based on:
+    - Service flow rate: 16 BV/hr (bed volumes per hour)
+    - Linear velocity: 25 m/hr maximum
+    - Minimum bed depth: 0.75 m
+    - N+1 redundancy (1 service + 1 standby vessel)
+    - Bed expansion during regeneration (50% Na-form, 100% H-form)
+    
+    Input parameters:
+    {
+      "water_analysis": {
+        "flow_m3_hr": 100,
+        "ca_mg_l": 80.06,
+        "mg_mg_l": 24.29,
+        "na_mg_l": 838.9,
+        "hco3_mg_l": 121.95,  // Required for WAC
+        "pH": 7.8,
+        "cl_mg_l": 1435
+      },
+      "resin_type": "WAC_Na",  // or "WAC_H"
+      "target_hardness_mg_l_caco3": 5.0,
+      "target_alkalinity_mg_l_caco3": 5.0  // For H-form
+    }
+    
+    Key differences from SAC:
+    - resin_type parameter selects WAC_Na or WAC_H
+    - Alkalinity (hco3_mg_l) is critical for WAC performance
+    - H-form removes alkalinity and generates CO2
+    - Na-form uses two-step regeneration
+    - Higher capacity but pH-dependent
+    
+    Returns vessel configuration with:
+    - Hydraulic sizing
+    - Regeneration sequence
+    - Water chemistry analysis
+    - Design notes and warnings
+    """
+)
+async def configure_wac_ix(configuration_input: Dict[str, Any]) -> Dict[str, Any]:
+    """Configure WAC vessel with hydraulic sizing."""
+    import time
+    start_time = time.time()
+    logger.info(f"configure_wac_ix started at {start_time}")
+    
+    try:
+        import json
+        import asyncio
+        
+        # Handle both string and object inputs
+        if isinstance(configuration_input, str):
+            try:
+                configuration_input = json.loads(configuration_input)
+            except json.JSONDecodeError:
+                return {
+                    "error": "Invalid JSON input",
+                    "details": "Input must be a valid JSON object or dict"
+                }
+        
+        # Validate input size
+        input_size = len(json.dumps(configuration_input))
+        if input_size > MAX_REQUEST_SIZE:
+            return {
+                "error": "Request too large",
+                "details": f"Request size {input_size} bytes exceeds maximum {MAX_REQUEST_SIZE} bytes"
+            }
+        
+        # Convert dict to pydantic model
+        wac_input = WACConfigurationInput(**configuration_input)
+        
+        # Log before calling the function
+        logger.info(f"Configuring WAC {wac_input.resin_type} vessel")
+        
+        # Run synchronous function in thread pool
+        loop = asyncio.get_event_loop()
+        try:
+            result = await asyncio.wait_for(
+                loop.run_in_executor(None, configure_wac_vessel, wac_input),
+                timeout=30.0
+            )
+            logger.info("configure_wac_vessel returned")
+        except asyncio.TimeoutError:
+            logger.error("configure_wac_vessel timed out after 30 seconds")
+            return {
+                "error": "Configuration timeout",
+                "details": "The configuration process took too long to complete"
+            }
+        
+        # Convert result to dict
+        output = result.model_dump()
+        
+        elapsed = time.time() - start_time
+        logger.info(f"configure_wac_ix completed in {elapsed:.2f} seconds")
+        return output
+        
+    except Exception as e:
+        logger.error(f"WAC configuration failed: {e}")
+        return {
+            "error": "Configuration failed",
+            "details": str(e),
+            "hint": "Check resin_type (WAC_Na or WAC_H) and water_analysis parameters"
+        }
+
 if NOTEBOOK_RUNNER_AVAILABLE:
     @mcp.tool(
         description="""Run complete SAC analysis with integrated simulation and visualization.
@@ -519,6 +631,111 @@ if NOTEBOOK_RUNNER_AVAILABLE:
         """Execute SAC analysis notebook with parameters."""
         return await run_sac_notebook_analysis_impl(analysis_input)
 
+# Add WAC simulation tool
+@mcp.tool(
+    description="""Simulate complete WAC ion exchange cycle (service + regeneration).
+    
+    Required input structure:
+    {
+        "water_analysis": {...},
+        "vessel_configuration": {...},
+        "resin_type": "WAC_Na" or "WAC_H",
+        "target_hardness_mg_l_caco3": 5.0,
+        "target_alkalinity_mg_l_caco3": 5.0,  // For H-form
+        "regeneration_config": {
+            // Auto-populated based on resin type
+        }
+    }
+    
+    Key differences from SAC simulation:
+    - WAC_Na: Uses two-step regeneration (acid → water → caustic → water)
+    - WAC_H: Single-step acid regeneration with high efficiency
+    - H-form tracks alkalinity breakthrough and CO2 generation
+    - Both forms have pH-dependent capacity
+    
+    Breakthrough criteria:
+    - Na-form: Hardness breakthrough (same as SAC)
+    - H-form: Alkalinity breakthrough OR active sites < 10%
+    
+    Key Features:
+    - PHREEQC determines pH-dependent capacity
+    - Tracks alkalinity, pH, and CO2 throughout service
+    - Counter-current regeneration modeling
+    - Active site utilization for H-form
+    - Temporary vs permanent hardness removal metrics
+    
+    Returns complete cycle results:
+    - Service phase:
+      - Breakthrough BV based on resin-specific criteria
+      - Alkalinity and pH profiles
+      - CO2 generation (H-form)
+      - Active site utilization (H-form)
+    - Regeneration phase:
+      - Chemical consumption by step
+      - Efficiency metrics
+      - Waste characterization
+    - Performance metrics specific to WAC chemistry
+    
+    Note: H-form WAC typically requires downstream decarbonation
+    """
+)
+async def simulate_wac_ix(simulation_input: str) -> Dict[str, Any]:
+    """Wrapper for WAC PHREEQC simulation."""
+    try:
+        # Validate input size
+        if len(simulation_input) > MAX_REQUEST_SIZE:
+            return {
+                "status": "error",
+                "error": "Request too large",
+                "details": f"Request size {len(simulation_input)} bytes exceeds maximum {MAX_REQUEST_SIZE} bytes"
+            }
+        
+        import asyncio
+        
+        # Parse input JSON
+        input_data = json.loads(simulation_input)
+        
+        # Auto-populate regeneration config based on resin type if not provided
+        if 'regeneration_config' not in input_data or not input_data['regeneration_config']:
+            resin_type = input_data.get('vessel_configuration', {}).get('resin_type', '')
+            if resin_type in ['WAC_Na', 'WAC_H']:
+                # Load from resin parameters
+                project_root = get_project_root()
+                db_path = project_root / "databases" / "resin_parameters.json"
+                with open(db_path, 'r') as f:
+                    resin_db = json.load(f)
+                
+                if resin_type in resin_db:
+                    regen_config = resin_db[resin_type].get('regeneration', {})
+                    input_data['regeneration_config'] = {
+                        'enabled': True,
+                        'regenerant_type': 'HCl',  # Primary regenerant for WAC
+                        'concentration_percent': 5,
+                        'regenerant_dose_g_per_L': regen_config.get('total_regenerant_dose_g_L', 100),
+                        'mode': 'staged_fixed',
+                        'regeneration_stages': len(regen_config.get('steps', [])),
+                        'flow_direction': 'back',
+                        'backwash_enabled': False  # WAC typically doesn't backwash
+                    }
+        
+        # Convert to pydantic model
+        sim_input = WACSimulationInput(**input_data)
+        
+        # Run simulation in thread pool
+        loop = asyncio.get_event_loop()
+        result = await loop.run_in_executor(None, simulate_wac_system, sim_input)
+        
+        # Convert result to dict
+        return result.model_dump()
+        
+    except Exception as e:
+        logger.error(f"WAC simulation failed: {e}")
+        return {
+            "status": "error",
+            "error": str(e),
+            "details": "WAC simulation failed. Check input data and resin type."
+        }
+
 # Tools are already registered via decorators above
 
 # Main entry point
@@ -538,6 +755,8 @@ def main():
     logger.info("Available tools:")
     logger.info("  - configure_sac_ix: SAC vessel hydraulic sizing (no chemistry calculations)")
     logger.info("  - simulate_sac_ix: Direct PHREEQC simulation with target hardness breakthrough")
+    logger.info("  - configure_wac_ix: WAC vessel hydraulic sizing (Na-form or H-form)")
+    logger.info("  - simulate_wac_ix: WAC PHREEQC simulation with alkalinity tracking")
     if NOTEBOOK_RUNNER_AVAILABLE:
         logger.info("  - run_sac_notebook_analysis: Integrated analysis with Jupyter notebook (RECOMMENDED)")
     
