@@ -149,7 +149,11 @@ watertap_ix_transport/__pycache__/
 watertap_ix_transport/**/__pycache__/
 utils/
 config/
-databases/
+# databases/ directory is required - only ignore database files
+databases/*.db
+databases/*.dat
+databases/*.phr
+!databases/.gitkeep
 
 # Examples to exclude
 examples/ix_example.py
