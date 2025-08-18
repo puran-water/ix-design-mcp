@@ -99,7 +99,7 @@ class RegenerationConfig(BaseModel):
     min_regenerant_bv: float = Field(2.0, description="Minimum BV to search")
     max_regenerant_bv: float = Field(6.0, description="Maximum BV to search")
     optimization_tolerance: float = Field(0.01, description="Recovery tolerance (±1%)")
-    max_optimization_iterations: int = Field(10, description="Max bisection iterations")
+    max_optimization_iterations: int = Field(6, description="Max bisection iterations (reduced from 10 for speed)")
     
     # Flow and rinse parameters
     flow_direction: Literal["forward", "back"] = Field("back", description="Flow direction (back = counter-current)")
@@ -1497,7 +1497,7 @@ END
         high_bv = regen_config.max_regenerant_bv
         
         # Calculate max iterations
-        precision = 0.1
+        precision = 0.2  # Coarsened from 0.1 for faster convergence
         theoretical_max = int(np.ceil(np.log2((high_bv - low_bv) / precision)))
         max_iterations = min(
             regen_config.max_optimization_iterations,
@@ -1538,6 +1538,11 @@ END
                 if recovery >= target - tolerance:
                     if best_valid is None or mid_bv < best_valid['bv']:
                         best_valid = {'bv': mid_bv, 'recovery': recovery}
+                    
+                    # Early stop if close enough to target (within 2%)
+                    if abs(recovery - target) <= max(tolerance, 0.02):
+                        logger.info(f"Early stop: {recovery:.1%} close enough to target {target:.1%}")
+                        break
                 
                 # Monotonic bisection
                 if recovery >= target:

@@ -141,7 +141,7 @@ class CoreConfig:
     
     # Simulation parameters
     DEFAULT_TOLERANCE: float = 1e-6  # Numerical tolerance for convergence
-    DEFAULT_CELLS: int = 10  # Number of cells for column discretization
+    DEFAULT_CELLS: int = 8  # Number of cells for column discretization (reduced from 10 for speed)
     DEFAULT_MAX_BV: int = 200  # Maximum bed volumes to simulate
     
     # PHREEQC executable path (from environment or default)

@@ -490,10 +490,31 @@ async def simulate_sac_ix(simulation_input: str) -> Dict[str, Any]:
         # Run simulation in thread pool to avoid blocking event loop
         # This is important as PHREEQC simulations can take several seconds
         loop = asyncio.get_event_loop()
-        result = await loop.run_in_executor(None, simulate_sac_phreeqc, sim_input)
         
-        # Convert result to dict
-        return result.model_dump()
+        try:
+            # Add timeout to prevent client timeout issues
+            result = await asyncio.wait_for(
+                loop.run_in_executor(None, simulate_sac_phreeqc, sim_input),
+                timeout=180  # 3 minutes (well within typical MCP client timeout)
+            )
+            return result.model_dump()
+        except asyncio.TimeoutError:
+            # Fallback to fast fixed-dose mode
+            logger.warning("Optimization timeout - falling back to fixed dose mode")
+            sim_input.regeneration_config.mode = "staged_fixed"
+            sim_input.regeneration_config.regenerant_bv = 3.5  # Standard NaCl dose
+            
+            # Run again with fixed mode (much faster)
+            quick_result = await loop.run_in_executor(None, simulate_sac_phreeqc, sim_input)
+            output = quick_result.model_dump()
+            
+            # Add warning about degraded mode
+            if "warnings" not in output:
+                output["warnings"] = []
+            output["warnings"].append("Used fixed regeneration dose due to timeout (optimization would take too long)")
+            output["optimization_skipped"] = True
+            
+            return output
         
     except Exception as e:
         logger.error(f"SAC simulation failed: {e}")
