@@ -158,7 +158,6 @@ class CoreConfig:
             r"C:\Program Files\USGS\phreeqc\bin\phreeqc.bat",
             r"C:\Program Files (x86)\USGS\phreeqc\bin\phreeqc.bat",
             r"C:\phreeqc\bin\phreeqc.bat",
-            "/home/hvksh/process/phreeqc/bin/phreeqc",
             "/usr/local/bin/phreeqc",
             "/usr/bin/phreeqc",
         ]
