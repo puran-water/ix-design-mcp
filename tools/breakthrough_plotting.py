@@ -402,7 +402,7 @@ def _generate_multiphase_html(
     fig.update_yaxes(title_text="Na⁺ Sites (%)", row=2, col=1, secondary_y=True)
     fig.update_yaxes(title_text="TDS (mg/L)", row=3, col=1)
     
-    title = "Ion Exchange Full Cycle: Service → Regeneration → Rinse"
+    title = "Ion Exchange Full Cycle: Service -> Regeneration -> Rinse"
     if metadata.get('vessel_id'):
         title += f" - {metadata['vessel_id']}"
     
@@ -789,7 +789,7 @@ def _create_multiphase_plotly_figure(data: Dict[str, Any], feed_na: float, targe
     fig.update_yaxes(title_text="Na⁺ Sites (%)", row=2, col=1, secondary_y=True)
     fig.update_yaxes(title_text="TDS (mg/L)", row=3, col=1)
     
-    title = "Ion Exchange Full Cycle: Service → Regeneration → Rinse"
+    title = "Ion Exchange Full Cycle: Service -> Regeneration -> Rinse"
     
     fig.update_layout(
         title=title,

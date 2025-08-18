@@ -301,7 +301,7 @@ class BaseWACSimulation(BaseIXSimulation):
         stage_results = []
         regenerant = fresh_regenerant.copy()
         
-        # Counter-current: stage N → 1
+        # Counter-current: stage N -> 1
         for stage_num in reversed(range(n_stages)):
             logger.debug(f"Stage {stage_num + 1}/{n_stages}, volume={effective_stage_volume_L:.1f} L")
             
