@@ -276,8 +276,21 @@ class _IXDirectPhreeqcSimulation:
         except (FileNotFoundError, RuntimeError) as e:
             logger.warning(f"Failed to initialize PHREEQC at {phreeqc_exe}: {e}")
             # Try without specifying path (will search system)
-            self.engine = DirectPhreeqcEngine(keep_temp_files=False)
-            logger.info("Using DirectPhreeqcEngine with system PHREEQC")
+            try:
+                self.engine = DirectPhreeqcEngine(keep_temp_files=False)
+                logger.info("Using DirectPhreeqcEngine with system PHREEQC")
+            except (FileNotFoundError, RuntimeError) as e2:
+                logger.error(f"Failed to find PHREEQC in system PATH: {e2}")
+                # Check if PHREEQC_EXE is set but not in CONFIG's path
+                import os
+                env_phreeqc = os.environ.get('PHREEQC_EXE')
+                if env_phreeqc and env_phreeqc != str(phreeqc_exe):
+                    logger.info(f"Trying PHREEQC_EXE from environment: {env_phreeqc}")
+                    self.engine = DirectPhreeqcEngine(phreeqc_path=env_phreeqc, keep_temp_files=False)
+                else:
+                    raise RuntimeError(
+                        "PHREEQC executable not found. Please install PHREEQC and set PHREEQC_EXE environment variable."
+                    )
             
     def run_sac_simulation(
         self,
