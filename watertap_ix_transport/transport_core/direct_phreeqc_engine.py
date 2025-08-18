@@ -58,6 +58,7 @@ class DirectPhreeqcEngine:
             r"C:\phreeqc\bin\phreeqc.bat",
             r"C:\Program Files\phreeqc\phreeqc.exe",
             r"C:\Program Files (x86)\phreeqc\phreeqc.exe",
+            "/home/hvksh/process/phreeqc/bin/phreeqc",
             "/usr/local/bin/phreeqc",
             "/usr/bin/phreeqc",
             "phreeqc",  # Try PATH
