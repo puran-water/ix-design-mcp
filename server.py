@@ -158,9 +158,9 @@ def validate_paths():
 #     description="""Size ion exchange vessels for RO pretreatment.
 #     
 #     Returns hydraulic sizing for ALL THREE flowsheet alternatives:
-#     - H-WAC → Degasser → Na-WAC (for mostly temporary hardness)
-#     - SAC → Na-WAC → Degasser (for mixed hardness types)  
-#     - Na-WAC → Degasser (for simple water chemistry)
+#     - H-WAC -> Degasser -> Na-WAC (for mostly temporary hardness)
+#     - SAC -> Na-WAC -> Degasser (for mixed hardness types)  
+#     - Na-WAC -> Degasser (for simple water chemistry)
 #     
 #     EXAMPLE INPUT:
 #     {
@@ -660,7 +660,7 @@ if NOTEBOOK_RUNNER_AVAILABLE:
     }
     
     Key differences from SAC simulation:
-    - WAC_Na: Uses two-step regeneration (acid → water → caustic → water)
+    - WAC_Na: Uses two-step regeneration (acid -> water -> caustic -> water)
     - WAC_H: Single-step acid regeneration with high efficiency
     - H-form tracks alkalinity breakthrough and CO2 generation
     - Both forms have pH-dependent capacity

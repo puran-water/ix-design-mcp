@@ -86,7 +86,7 @@ class RegenerationConfig(BaseModel):
         5,
         ge=3,
         le=10,
-        description="Number of counter-current stages (5 → ~90%, 8-10 → ~95%)"
+        description="Number of counter-current stages (5 -> ~90%, 8-10 -> ~95%)"
     )
     
     # Optimization parameters (for staged_optimize mode)
@@ -1299,7 +1299,7 @@ END
         stage_results = []
         regenerant = fresh_regenerant.copy()
         
-        # Counter-current: stage N → 1
+        # Counter-current: stage N -> 1
         for stage_num in reversed(range(n_stages)):
             logger.debug(f"Stage {stage_num + 1}/{n_stages}, volume={effective_stage_volume_L:.1f} L")
             
@@ -1324,13 +1324,13 @@ END
                 selected_data = []
                 if selected:
                     selected_data = self.engine.parse_selected_output(selected)
-                    # Debug output
-                    if stage_num == 0:
-                        print(f"\n=== Stage {stage_num+1} PHREEQC Output Debug ===")
-                        print(f"Number of data rows: {len(selected_data)}")
-                        if selected_data:
-                            print(f"Column names: {list(selected_data[0].keys())}")
-                            print(f"Last row data: {selected_data[-1]}")
+                    # Debug output (commented out to prevent stdout pollution)
+                    # if stage_num == 0:
+                    #     logger.debug(f"\n=== Stage {stage_num+1} PHREEQC Output Debug ===")
+                    #     logger.debug(f"Number of data rows: {len(selected_data)}")
+                    #     if selected_data:
+                    #         logger.debug(f"Column names: {list(selected_data[0].keys())}")
+                    #         logger.debug(f"Last row data: {selected_data[-1]}")
                 
                 # Extract results preserving absolute moles
                 if not selected_data:
@@ -1542,7 +1542,7 @@ END
                 # Monotonic bisection
                 if recovery >= target:
                     high_bv = mid_bv
-                    logger.info(f"Iter {iter_count}: [{low_bv:.1f} → {high_bv:.1f}] BV, rec={recovery:.1%}")
+                    logger.info(f"Iter {iter_count}: [{low_bv:.1f} -> {high_bv:.1f}] BV, rec={recovery:.1%}")
                 else:
                     low_bv = mid_bv
                     
@@ -1626,7 +1626,7 @@ END
             'target_met': final_recovery >= target - tolerance
         }
         
-        logger.info(f"Optimization complete: {optimal_bv:.2f} BV → {final_recovery:.1%} recovery")
+        logger.info(f"Optimization complete: {optimal_bv:.2f} BV -> {final_recovery:.1%} recovery")
         if savings_percent > 0:
             logger.info(f"Chemical savings: {savings_percent:.1f}% vs typical")
         

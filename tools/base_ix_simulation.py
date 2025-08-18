@@ -676,7 +676,7 @@ class BaseIXSimulation(ABC):
         Calculate CO2 generation from alkalinity removal.
         
         When alkalinity (HCO3-) is removed by H-form resins:
-        HCO3- + H+ → H2O + CO2
+        HCO3- + H+ -> H2O + CO2
         
         The CO2 concentration depends on pH and carbonate equilibrium.
         
