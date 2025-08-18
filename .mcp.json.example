@@ -1,0 +1,16 @@
+{
+  "mcpServers": {
+    "ix-design-mcp": {
+      "type": "stdio",
+      "command": "python",
+      "args": [
+        "server.py"
+      ],
+      "env": {
+        "MCP_TIMEOUT": "600000",
+        "IX_DESIGN_MCP_ROOT": ".",
+        "PHREEQC_EXE": "/usr/local/bin/phreeqc"
+      }
+    }
+  }
+}
