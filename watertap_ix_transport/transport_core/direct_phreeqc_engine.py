@@ -42,18 +42,28 @@ class DirectPhreeqcEngine:
         self.database_dir = self._find_database_dir()
         if self.database_dir and os.path.exists(os.path.join(self.database_dir, "phreeqc.dat")):
             self.default_database = os.path.join(self.database_dir, "phreeqc.dat")
+            logger.info(f"Using PHREEQC database: {self.default_database}")
         else:
-            # Fallback to standard location
-            self.default_database = r"C:\Program Files\USGS\phreeqc-3.8.6-17100-x64\database\phreeqc.dat"
+            # Fallback based on platform
+            if os.name == 'nt':
+                self.default_database = r"C:\Program Files\USGS\phreeqc-3.8.6-17100-x64\database\phreeqc.dat"
+            else:
+                # Linux/WSL fallback
+                self.default_database = "/home/hvksh/process/phreeqc/share/doc/phreeqc/database/phreeqc.dat"
+            logger.warning(f"Using fallback database: {self.default_database}")
         
     def _find_phreeqc_executable(self, custom_path: Optional[str] = None) -> Optional[str]:
         """Find PHREEQC executable in common locations"""
-        if custom_path and os.path.exists(custom_path):
-            return custom_path
+        if custom_path:
+            # Try the custom path even if we can't verify it exists (might be WSL path from Windows)
+            if os.path.exists(custom_path) or custom_path.startswith('/'):
+                logger.info(f"Using custom PHREEQC path: {custom_path}")
+                return custom_path
         
         # Check PHREEQC_EXE environment variable first
         env_phreeqc = os.environ.get('PHREEQC_EXE')
-        if env_phreeqc and os.path.exists(env_phreeqc):
+        if env_phreeqc:
+            # Accept environment variable even if we can't verify it exists (WSL paths)
             logger.info(f"Found PHREEQC from PHREEQC_EXE environment variable: {env_phreeqc}")
             return env_phreeqc
         
@@ -89,7 +99,8 @@ class DirectPhreeqcEngine:
         """Find PHREEQC database directory"""
         # Check environment variable first
         env_database = os.environ.get('PHREEQC_DATABASE')
-        if env_database and os.path.exists(env_database):
+        if env_database:
+            # Accept environment variable even if we can't verify it exists (WSL paths)
             logger.info(f"Found PHREEQC database from PHREEQC_DATABASE environment variable: {env_database}")
             return os.path.dirname(env_database)
         
