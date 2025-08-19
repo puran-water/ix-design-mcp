@@ -246,8 +246,42 @@ class SACSimulationOutput(BaseModel):
     total_cycle_time_hours: float  # No longer optional
 
 
+class SACSimulation(BaseIXSimulation):
+    """SAC ion exchange simulation using unified BaseIXSimulation engine."""
+    
+    def __init__(self):
+        """Initialize SAC simulation with shared engine from BaseIXSimulation."""
+        super().__init__()  # Use shared engine initialization
+        logger.info("Initialized SACSimulation with unified PHREEQC engine")
+        
+        # Create legacy simulation instance for method access
+        # This is temporary - methods will be migrated directly to this class
+        self._legacy_sim = _IXDirectPhreeqcSimulation()
+    
+    def run_sac_simulation(self, *args, **kwargs):
+        """Run SAC simulation - temporarily delegate to legacy class."""
+        # Replace legacy engine with our unified engine
+        self._legacy_sim.engine = self.engine
+        return self._legacy_sim.run_sac_simulation(*args, **kwargs)
+    
+    def find_target_breakthrough(self, *args, **kwargs):
+        """Find breakthrough point - temporarily delegate to legacy class."""
+        return self._legacy_sim.find_target_breakthrough(*args, **kwargs)
+    
+    def run_full_cycle_simulation(self, *args, **kwargs):
+        """Run full cycle simulation - temporarily delegate to legacy class."""
+        # Replace legacy engine with our unified engine
+        self._legacy_sim.engine = self.engine
+        return self._legacy_sim.run_full_cycle_simulation(*args, **kwargs)
+
+
+# Legacy class - kept for backward compatibility temporarily
 class _IXDirectPhreeqcSimulation:
-    """Direct PHREEQC-based ion exchange simulation for SAC resins."""
+    """Direct PHREEQC-based ion exchange simulation for SAC resins.
+    
+    DEPRECATED: This class is kept for backward compatibility.
+    New code should use SACSimulation which inherits from BaseIXSimulation.
+    """
     
     def __init__(self):
         """Initialize simulation."""
@@ -267,7 +301,7 @@ class _IXDirectPhreeqcSimulation:
                 logger.warning(f"Failed to initialize OptimizedPhreeqcEngine: {e}")
         
         # Fall back to DirectPhreeqcEngine if optimized not available or failed
-        # Get PHREEQC executable from centralized config
+        # Get PHREEQC path from config
         phreeqc_exe = CONFIG.get_phreeqc_exe()
         
         try:
@@ -2088,7 +2122,7 @@ def _run_service_only_simulation(input_data: SACSimulationInput) -> SACSimulatio
     }
     
     # Run PHREEQC simulation ONCE
-    sim = _IXDirectPhreeqcSimulation()
+    sim = SACSimulation()  # Use new unified class
     warnings = []
     
     logger.info(f"Running PHREEQC simulation...")
@@ -2201,7 +2235,7 @@ def _run_full_cycle_simulation(input_data: SACSimulationInput) -> SACSimulationO
     full_data = input_data.full_data
     
     # Create simulation instance
-    sim = _IXDirectPhreeqcSimulation()
+    sim = SACSimulation()  # Use new unified class
     
     # Build vessel config for PHREEQC
     vessel_config_phreeqc = {

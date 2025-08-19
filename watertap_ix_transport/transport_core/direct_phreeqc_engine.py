@@ -45,6 +45,19 @@ class DirectPhreeqcEngine:
         
         # Database paths
         self.default_database = self._find_database_path()
+        
+        # Fallback to CONFIG if database not found
+        if not self.default_database:
+            logger.warning("Database not found via standard paths, trying CONFIG")
+            try:
+                from tools.core_config import CONFIG
+                config_db = str(CONFIG.get_phreeqc_database())
+                if config_db and self._path_exists_compatible(config_db):
+                    self.default_database = config_db
+                    logger.info(f"Found database via CONFIG: {self.default_database}")
+            except Exception as e:
+                logger.warning(f"Failed to get database from CONFIG: {e}")
+        
         if self.default_database:
             logger.info(f"Using PHREEQC database: {self.default_database}")
         else:
@@ -226,6 +239,17 @@ class DirectPhreeqcEngine:
         # Use default database if none specified
         if database is None:
             database = self.default_database
+        
+        # Additional validation for empty database string
+        if not database or database == "":
+            logger.error("Database path is empty, attempting to re-fetch from CONFIG")
+            try:
+                from tools.core_config import CONFIG
+                database = str(CONFIG.get_phreeqc_database())
+                logger.info(f"Re-fetched database path: {database}")
+            except Exception as e:
+                logger.error(f"Failed to re-fetch database: {e}")
+                database = None
         
         # Validate database exists and is compatible with OS
         if not self._path_exists_compatible(database):
@@ -545,7 +569,7 @@ def get_phreeqc_engine(keep_temp_files: bool = False, default_timeout_s: int = 9
     """
     # Try to get PHREEQC path from centralized config
     try:
-        from watertap_ix_transport.transport_core.tools.core_config import CONFIG
+        from tools.core_config import CONFIG
         phreeqc_path = str(CONFIG.get_phreeqc_exe())
     except ImportError:
         # Fallback - let DirectPhreeqcEngine find it
