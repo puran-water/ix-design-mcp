@@ -258,6 +258,14 @@ class SACSimulation(BaseIXSimulation):
         # This is temporary - methods will be migrated directly to this class
         self._legacy_sim = _IXDirectPhreeqcSimulation()
     
+    def run_simulation(self, input_data):
+        """Required abstract method from BaseIXSimulation.
+        
+        This is not used in current SAC workflow but required for inheritance.
+        """
+        # Not implemented - SAC uses run_sac_simulation instead
+        raise NotImplementedError("Use run_sac_simulation or run_full_cycle_simulation instead")
+    
     def run_sac_simulation(self, *args, **kwargs):
         """Run SAC simulation - temporarily delegate to legacy class."""
         # Replace legacy engine with our unified engine
