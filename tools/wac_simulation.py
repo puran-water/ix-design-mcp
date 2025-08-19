@@ -197,7 +197,7 @@ class BaseWACSimulation(BaseIXSimulation):
         Adapted from SAC for WAC-specific chemistry.
         """
         n_stages = regen_config.regeneration_stages
-        cells = 10  # Use fixed cells for simplicity
+        cells = CONFIG.DEFAULT_CELLS  # Use optimized cell count
         
         # Get database path
         db_path = str(CONFIG.get_phreeqc_database())
@@ -918,7 +918,7 @@ class WacNaSimulation(BaseWACSimulation):
         phreeqc_input = create_wac_na_phreeqc_input(
             water_composition=water.model_dump(),
             vessel_config=vessel.model_dump(),
-            cells=10,
+            cells=CONFIG.DEFAULT_CELLS,
             max_bv=max_bv,
             enable_enhancements=CONFIG.ENABLE_IONIC_STRENGTH_CORRECTION or CONFIG.ENABLE_TEMPERATURE_CORRECTION,
             capacity_factor=vessel.capacity_factor if hasattr(vessel, 'capacity_factor') else 1.0
@@ -1121,7 +1121,7 @@ class WacHSimulation(BaseWACSimulation):
         phreeqc_input = create_wac_h_phreeqc_input(
             water_composition=water.model_dump(),
             vessel_config=vessel.model_dump(),
-            cells=10,
+            cells=CONFIG.DEFAULT_CELLS,
             max_bv=max_bv,
             enable_enhancements=CONFIG.ENABLE_IONIC_STRENGTH_CORRECTION or CONFIG.ENABLE_TEMPERATURE_CORRECTION,
             capacity_factor=vessel.capacity_factor if hasattr(vessel, 'capacity_factor') else 1.0

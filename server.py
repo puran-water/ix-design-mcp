@@ -147,6 +147,89 @@ def validate_paths():
         logger.error(f"Project root: {root}")
         logger.error("Set IX_DESIGN_MCP_ROOT environment variable to the project directory")
         logger.error("Example: export IX_DESIGN_MCP_ROOT=/path/to/ix-design-mcp")
+
+
+def ensure_simulation_input_complete(input_data: Dict[str, Any], resin_type: str) -> Dict[str, Any]:
+    """
+    Ensure simulation input has all required fields.
+    Fills in missing fields with appropriate defaults.
+    
+    Args:
+        input_data: Partial simulation input data
+        resin_type: Type of resin (SAC, WAC_Na, WAC_H)
+    
+    Returns:
+        Complete simulation input data
+    """
+    # Ensure vessel_configuration has all required fields
+    if 'vessel_configuration' in input_data:
+        vessel_config = input_data['vessel_configuration']
+        
+        # Add bed_expansion_percent if missing (common issue)
+        if 'bed_expansion_percent' not in vessel_config:
+            if resin_type == 'WAC_Na':
+                vessel_config['bed_expansion_percent'] = 50.0  # Na-form WAC default
+            elif resin_type == 'WAC_H':
+                vessel_config['bed_expansion_percent'] = 100.0  # H-form WAC default
+            else:
+                vessel_config['bed_expansion_percent'] = 50.0  # SAC default
+            logger.info(f"Added missing bed_expansion_percent: {vessel_config['bed_expansion_percent']}%")
+        
+        # Ensure resin_type is set in vessel_configuration
+        if 'resin_type' not in vessel_config:
+            vessel_config['resin_type'] = resin_type
+            logger.info(f"Added missing resin_type: {resin_type}")
+    
+    # Ensure regeneration_config exists with defaults
+    if 'regeneration_config' not in input_data or not input_data['regeneration_config']:
+        # Load defaults from resin parameters
+        project_root = get_project_root()
+        db_path = project_root / "databases" / "resin_parameters.json"
+        try:
+            with open(db_path, 'r') as f:
+                resin_db = json.load(f)
+            
+            if resin_type in resin_db:
+                regen_params = resin_db[resin_type].get('regeneration', {})
+                if resin_type == 'SAC':
+                    input_data['regeneration_config'] = {
+                        'enabled': True,
+                        'regenerant_type': 'NaCl',
+                        'concentration_percent': 10,
+                        'regenerant_dose_g_per_L': 100,
+                        'mode': 'staged_fixed',  # Use fixed mode for speed
+                        'regeneration_stages': 5,
+                        'flow_direction': 'back',
+                        'backwash_enabled': True,
+                        'target_recovery': 0.90
+                    }
+                elif resin_type in ['WAC_Na', 'WAC_H']:
+                    input_data['regeneration_config'] = {
+                        'enabled': True,
+                        'regenerant_type': 'HCl',
+                        'concentration_percent': 5,
+                        'regenerant_dose_g_per_L': regen_params.get('total_regenerant_dose_g_L', 100),
+                        'mode': 'staged_fixed',
+                        'regeneration_stages': len(regen_params.get('steps', [])) or 2,
+                        'flow_direction': 'back',
+                        'backwash_enabled': False  # WAC typically doesn't backwash
+                    }
+                logger.info(f"Added default regeneration_config for {resin_type}")
+        except Exception as e:
+            logger.warning(f"Could not load default regeneration config: {e}")
+            # Use minimal defaults
+            input_data['regeneration_config'] = {
+                'enabled': True,
+                'regenerant_type': 'NaCl' if resin_type == 'SAC' else 'HCl',
+                'concentration_percent': 10 if resin_type == 'SAC' else 5,
+                'regenerant_dose_g_per_L': 100,
+                'mode': 'staged_fixed',
+                'regeneration_stages': 5,
+                'flow_direction': 'back',
+                'backwash_enabled': resin_type == 'SAC'
+            }
+    
+    return input_data
         raise FileNotFoundError(f"Required paths not found: {', '.join(missing_paths)}")
     
     logger.info("All required paths validated successfully")
@@ -484,6 +567,9 @@ async def simulate_sac_ix(simulation_input: str) -> Dict[str, Any]:
         # Parse input JSON
         input_data = json.loads(simulation_input)
         
+        # Ensure all required fields are present
+        input_data = ensure_simulation_input_complete(input_data, 'SAC')
+        
         # Convert to pydantic model
         sim_input = SACSimulationInput(**input_data)
         
@@ -741,28 +827,11 @@ async def simulate_wac_ix(simulation_input: str) -> Dict[str, Any]:
         # Parse input JSON
         input_data = json.loads(simulation_input)
         
-        # Auto-populate regeneration config based on resin type if not provided
-        if 'regeneration_config' not in input_data or not input_data['regeneration_config']:
-            resin_type = input_data.get('vessel_configuration', {}).get('resin_type', '')
-            if resin_type in ['WAC_Na', 'WAC_H']:
-                # Load from resin parameters
-                project_root = get_project_root()
-                db_path = project_root / "databases" / "resin_parameters.json"
-                with open(db_path, 'r') as f:
-                    resin_db = json.load(f)
-                
-                if resin_type in resin_db:
-                    regen_config = resin_db[resin_type].get('regeneration', {})
-                    input_data['regeneration_config'] = {
-                        'enabled': True,
-                        'regenerant_type': 'HCl',  # Primary regenerant for WAC
-                        'concentration_percent': 5,
-                        'regenerant_dose_g_per_L': regen_config.get('total_regenerant_dose_g_L', 100),
-                        'mode': 'staged_fixed',
-                        'regeneration_stages': len(regen_config.get('steps', [])),
-                        'flow_direction': 'back',
-                        'backwash_enabled': False  # WAC typically doesn't backwash
-                    }
+        # Get resin type for validation
+        resin_type = input_data.get('vessel_configuration', {}).get('resin_type', 'WAC_Na')
+        
+        # Ensure all required fields are present
+        input_data = ensure_simulation_input_complete(input_data, resin_type)
         
         # Convert to pydantic model
         sim_input = WACSimulationInput(**input_data)

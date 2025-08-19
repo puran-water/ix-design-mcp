@@ -99,7 +99,7 @@ class RegenerationConfig(BaseModel):
     min_regenerant_bv: float = Field(2.0, description="Minimum BV to search")
     max_regenerant_bv: float = Field(6.0, description="Maximum BV to search")
     optimization_tolerance: float = Field(0.01, description="Recovery tolerance (±1%)")
-    max_optimization_iterations: int = Field(6, description="Max bisection iterations (reduced from 10 for speed)")
+    max_optimization_iterations: int = Field(4, description="Max bisection iterations (reduced from 6 for speed)")
     
     # Flow and rinse parameters
     flow_direction: Literal["forward", "back"] = Field("back", description="Flow direction (back = counter-current)")
@@ -1008,13 +1008,30 @@ END
             )
             
             if regen_config.mode == "staged_optimize":
-                # Find optimal regenerant dosage
-                optimal_bv, opt_results = self.optimize_regenerant_dosage(
-                    initial_exchange_state=initial_exchange,
-                    water=water,
-                    vessel_config=vessel_config,
-                    regen_config=regen_config
+                # Check for high TDS water (>3000 mg/L) - use fixed mode for speed
+                water_tds = getattr(water, 'tds_mg_l', 0) or (
+                    water.ca_mg_l + water.mg_mg_l + water.na_mg_l + 
+                    water.cl_mg_l + water.hco3_mg_l + water.so4_mg_l
                 )
+                
+                if water_tds > 3000:
+                    logger.info(f"High TDS water ({water_tds:.0f} mg/L), using fixed regeneration for speed")
+                    regen_config.mode = "staged_fixed"
+                    # Use conservative regenerant dosage for high TDS
+                    regen_config.regenerant_bv = min(
+                        regen_config.max_regenerant_bv,
+                        regen_config.regenerant_bv * 1.2  # 20% safety factor
+                    )
+                    optimal_bv = regen_config.regenerant_bv
+                    opt_results = {"mode_switch": "high_tds", "tds": water_tds}
+                else:
+                    # Find optimal regenerant dosage
+                    optimal_bv, opt_results = self.optimize_regenerant_dosage(
+                        initial_exchange_state=initial_exchange,
+                        water=water,
+                        vessel_config=vessel_config,
+                        regen_config=regen_config
+                    )
                 
                 # Run with optimal dosage
                 final_exchange, stage_results = self.run_multi_stage_regeneration(
@@ -1539,7 +1556,7 @@ END
         high_bv = regen_config.max_regenerant_bv
         
         # Calculate max iterations
-        precision = 0.2  # Coarsened from 0.1 for faster convergence
+        precision = 0.5  # Coarsened from 0.2 for faster convergence
         theoretical_max = int(np.ceil(np.log2((high_bv - low_bv) / precision)))
         max_iterations = min(
             regen_config.max_optimization_iterations,
