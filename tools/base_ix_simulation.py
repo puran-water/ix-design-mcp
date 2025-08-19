@@ -84,16 +84,30 @@ class BaseIXSimulation(ABC):
         
         # Fall back to DirectPhreeqcEngine
         phreeqc_exe = CONFIG.get_phreeqc_exe()
+        phreeqc_db = CONFIG.get_phreeqc_database()
+        
+        logger.info(f"Attempting DirectPhreeqcEngine initialization:")
+        logger.info(f"  - PHREEQC exe: {phreeqc_exe}")
+        logger.info(f"  - PHREEQC database: {phreeqc_db}")
+        
         try:
             engine = DirectPhreeqcEngine(phreeqc_path=str(phreeqc_exe), keep_temp_files=False)
-            logger.info(f"Using DirectPhreeqcEngine at: {phreeqc_exe}")
+            # Verify the engine has a valid database path
+            if not engine.default_database:
+                logger.error("Engine created but has no database path")
+                raise RuntimeError("Engine has no database path")
+            logger.info(f"Using DirectPhreeqcEngine with database: {engine.default_database}")
             return engine
         except (FileNotFoundError, RuntimeError) as e:
             logger.warning(f"Failed to initialize PHREEQC at {phreeqc_exe}: {e}")
             # Try without specifying path (will search system)
             try:
                 engine = DirectPhreeqcEngine(keep_temp_files=False)
-                logger.info("Using DirectPhreeqcEngine with system PHREEQC")
+                # Verify the engine has a valid database path
+                if not engine.default_database:
+                    logger.error("Engine created but has no database path")
+                    raise RuntimeError("Engine has no database path")
+                logger.info(f"Using DirectPhreeqcEngine with system PHREEQC, database: {engine.default_database}")
                 return engine
             except (FileNotFoundError, RuntimeError) as e2:
                 logger.error(f"Failed to find PHREEQC in system PATH: {e2}")
@@ -103,6 +117,11 @@ class BaseIXSimulation(ABC):
                 if env_phreeqc and env_phreeqc != str(phreeqc_exe):
                     logger.info(f"Trying PHREEQC_EXE from environment: {env_phreeqc}")
                     engine = DirectPhreeqcEngine(phreeqc_path=env_phreeqc, keep_temp_files=False)
+                    # Verify the engine has a valid database path
+                    if not engine.default_database:
+                        logger.error("Engine created but has no database path")
+                        raise RuntimeError("Engine has no database path")
+                    logger.info(f"Using DirectPhreeqcEngine from env, database: {engine.default_database}")
                     return engine
                 else:
                     raise RuntimeError(
