@@ -1014,13 +1014,13 @@ END
                     water.cl_mg_l + water.hco3_mg_l + water.so4_mg_l
                 )
                 
-                if water_tds > 3000:
+                if water_tds > 2500:
                     logger.info(f"High TDS water ({water_tds:.0f} mg/L), using fixed regeneration for speed")
                     regen_config.mode = "staged_fixed"
                     # Use conservative regenerant dosage for high TDS
                     regen_config.regenerant_bv = min(
                         regen_config.max_regenerant_bv,
-                        regen_config.regenerant_bv * 1.2  # 20% safety factor
+                        regen_config.regenerant_bv * 1.5  # 50% safety factor for high TDS
                     )
                     optimal_bv = regen_config.regenerant_bv
                     opt_results = {"mode_switch": "high_tds", "tds": water_tds}

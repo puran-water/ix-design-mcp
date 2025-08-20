@@ -1108,20 +1108,26 @@ class WacHSimulation(BaseWACSimulation):
         # Calculate dynamic max_bv based on alkalinity loading (H-form primarily removes alkalinity)
         alkalinity_meq_L = water.hco3_mg_l / CONFIG.HCO3_EQUIV_WEIGHT
         
-        max_bv = self._calculate_dynamic_max_bv(
-            loading_meq_L=alkalinity_meq_L,
-            capacity_eq_L=CONFIG.WAC_H_WORKING_CAPACITY,
-            buffer_factor=1.2,
-            min_bv=200
+        # Limit max_bv for WAC_H to prevent timeout
+        max_bv = min(
+            500,  # Hard limit to prevent timeout
+            self._calculate_dynamic_max_bv(
+                loading_meq_L=alkalinity_meq_L,
+                capacity_eq_L=CONFIG.WAC_H_WORKING_CAPACITY,
+                buffer_factor=1.2,
+                min_bv=200
+            )
         )
         
         logger.info(f"Dynamic max_bv calculated: {max_bv} (alkalinity loading: {alkalinity_meq_L:.2f} meq/L)")
         
         # Create PHREEQC input with dynamic max_bv
+        # Use fewer cells for WAC_H to improve performance
+        wac_h_cells = min(6, CONFIG.DEFAULT_CELLS)
         phreeqc_input = create_wac_h_phreeqc_input(
             water_composition=water.model_dump(),
             vessel_config=vessel.model_dump(),
-            cells=CONFIG.DEFAULT_CELLS,
+            cells=wac_h_cells,
             max_bv=max_bv,
             enable_enhancements=CONFIG.ENABLE_IONIC_STRENGTH_CORRECTION or CONFIG.ENABLE_TEMPERATURE_CORRECTION,
             capacity_factor=vessel.capacity_factor if hasattr(vessel, 'capacity_factor') else 1.0
