@@ -1007,6 +1007,40 @@ class WacNaSimulation(BaseWACSimulation):
         final_hardness = breakthrough_data.get(hardness_key, np.array([]))
         final_hardness_value = float(final_hardness[-1]) if len(final_hardness) > 0 else target_hardness
         
+        # Run regeneration simulation for WAC_Na
+        # Extract resin state after service
+        resin_state = self._extract_final_resin_state(
+            service_bv=breakthrough_bv,
+            vessel_config=vessel.model_dump(),
+            water_analysis=water
+        )
+        
+        # Create regeneration config for WAC_Na (two-step process)
+        from tools.sac_simulation import RegenerationConfig
+        regen_config = RegenerationConfig(
+            regenerant_type="NaCl",  # Will be overridden for two-step
+            concentration_percent=5.0,
+            regenerant_bv=2.0,
+            regeneration_stages=3,
+            mode="staged_fixed",
+            flow_rate_bv_hr=2.0,
+            flow_direction="back",
+            backwash_enabled=False  # WAC typically doesn't need backwash
+        )
+        
+        # Run regeneration
+        try:
+            regen_results = self.run_regeneration(
+                resin_state=resin_state,
+                vessel_config=vessel.model_dump(),
+                regen_config=regen_config
+            )
+            regeneration_time_hours = regen_results.get('regeneration_time_hours', 4.0)
+            logger.info(f"WAC_Na regeneration completed: {regeneration_time_hours:.1f} hours")
+        except Exception as e:
+            logger.warning(f"Regeneration simulation failed: {e}. Using estimate.")
+            regeneration_time_hours = 4.0
+        
         # Prepare output
         return WACSimulationOutput(
             status="success" if breakthrough_reached else "warning",
@@ -1034,7 +1068,7 @@ class WacNaSimulation(BaseWACSimulation):
                 'hardness_loading_meq_L': hardness_meq_L,
                 'theoretical_bv': max_bv / 1.2  # Remove buffer factor
             },
-            total_cycle_time_hours=service_time_hours + 4.0  # Add regen time estimate
+            total_cycle_time_hours=service_time_hours + regeneration_time_hours
         )
 
 
