@@ -96,7 +96,7 @@ class RegenerationConfig(BaseModel):
         le=0.97,  # Capped per kinetic ceiling
         description="Target Na fraction recovery"
     )
-    min_regenerant_bv: float = Field(2.0, description="Minimum BV to search")
+    min_regenerant_bv: float = Field(0.5, description="Minimum BV to search")
     max_regenerant_bv: float = Field(6.0, description="Maximum BV to search")
     optimization_tolerance: float = Field(0.01, description="Recovery tolerance (±1%)")
     max_optimization_iterations: int = Field(4, description="Max bisection iterations (reduced from 6 for speed)")
@@ -156,11 +156,11 @@ class RegenerationConfig(BaseModel):
             # Adjust bounds based on calculated BV
             if v is not None:
                 # For min bound
-                if 'min_regenerant_bv' in cls.__fields__ and v == values.get('min_regenerant_bv'):
+                if 'min_regenerant_bv' in cls.model_fields and v == values.get('min_regenerant_bv'):
                     if v > calculated_bv:
-                        return max(calculated_bv * 0.7, 2.0)
+                        return max(calculated_bv * 0.7, 0.5)
                 # For max bound
-                elif 'max_regenerant_bv' in cls.__fields__ and v == values.get('max_regenerant_bv'):
+                elif 'max_regenerant_bv' in cls.model_fields and v == values.get('max_regenerant_bv'):
                     if v < calculated_bv:
                         return min(calculated_bv * 1.3, 6.0)
         return v
@@ -203,6 +203,16 @@ class RegenerationResults(BaseModel):
     ready_for_service: bool
     rinse_quality_achieved: bool
     regeneration_time_hours: float
+    
+    # Engineering KPIs
+    sites_restored_eq_L: Optional[float] = Field(
+        None,
+        description="Resin sites restored per liter of bed volume (eq/L)"
+    )
+    hardness_eluted_kg_caco3: Optional[float] = Field(
+        None,
+        description="Total hardness eluted as kg CaCO3 equivalent"
+    )
     
     # Add optimization information
     optimization_info: Optional[Dict[str, Any]] = Field(
@@ -1014,8 +1024,8 @@ END
                     water.cl_mg_l + water.hco3_mg_l + water.so4_mg_l
                 )
                 
-                if water_tds > 2500:
-                    logger.info(f"High TDS water ({water_tds:.0f} mg/L), using fixed regeneration for speed")
+                if water_tds > 10000:
+                    logger.info(f"Very high TDS water ({water_tds:.0f} mg/L), using fixed regeneration for speed")
                     regen_config.mode = "staged_fixed"
                     # Use conservative regenerant dosage for high TDS
                     regen_config.regenerant_bv = min(
@@ -1197,6 +1207,16 @@ END
         peak_mg_mg_l = max(row.get('Mg_mg_L', 0) for row in regen_data if 'Mg_mg_L' in row)
         peak_hardness = peak_ca_mg_l * 2.5 + peak_mg_mg_l * 4.1
         
+        # Calculate engineering KPIs
+        # Sites restored per liter of bed volume
+        resin_capacity_eq_L = vessel_config.get('resin_capacity_eq_L', CONFIG.RESIN_CAPACITY_EQ_L)
+        sites_restored_eq_L = final_na_fraction * resin_capacity_eq_L
+        
+        # Convert total hardness removed to kg CaCO3
+        # Ca: 40.08 g/mol -> CaCO3: 100.09 g/mol (factor = 2.497)
+        # Mg: 24.31 g/mol -> CaCO3: 100.09 g/mol (factor = 4.117)
+        hardness_as_caco3_kg = ca_removed_total * 2.497 + mg_removed_total * 4.117
+        
         return RegenerationResults(
             actual_regenerant_bv=round(actual_regen_bv, 1),
             regenerant_consumed_kg=round(regenerant_kg, 1),
@@ -1208,7 +1228,9 @@ END
             final_resin_recovery=round(final_na_fraction, 3),
             ready_for_service=rinse_quality_achieved,
             rinse_quality_achieved=rinse_quality_achieved,
-            regeneration_time_hours=round(regen_time_hours, 1)
+            regeneration_time_hours=round(regen_time_hours, 1),
+            sites_restored_eq_L=round(sites_restored_eq_L, 3),
+            hardness_eluted_kg_caco3=round(hardness_as_caco3_kg, 3)
         )
     
     def _compile_cycle_data(

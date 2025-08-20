@@ -125,11 +125,7 @@ EXCHANGE_SPECIES
     
     K+ + X- = KX
         log_k {CONFIG.WAC_LOGK_K_NA}
-        -gamma 3.5 0.015
-    
-    H+ + X- = HX
-        log_k {CONFIG.WAC_LOGK_H_NA}
-        -gamma 9.0 0.0"""
+        -gamma 3.5 0.015"""
     
     # Build PHREEQC input
     phreeqc_input = f"""
@@ -362,11 +358,11 @@ SOLUTION 0 Feed water
     N(5)      {water_composition.get('no3_mg_l', 0)} as NO3
     water     1 kg
 
-# Initial column solution (acidic to maintain H-form)
+# Initial column solution (mildly acidic to maintain H-form without being extreme)
 SOLUTION 1-{cells} Initial column water
     temp      {water_composition.get('temperature_celsius', 25)}
-    pH        3.5
-    Cl        1 charge  # Sufficient Cl- to balance H+ at pH 3.5
+    pH        5.5
+    Cl        0.01 charge  # Small amount of Cl- to balance H+ at pH 5.5
     water     {water_per_cell_kg} kg
 
 # WAC exchanger - start with X-, equilibrate with acidic solution to form HX
