@@ -147,6 +147,9 @@ def validate_paths():
         logger.error(f"Project root: {root}")
         logger.error("Set IX_DESIGN_MCP_ROOT environment variable to the project directory")
         logger.error("Example: export IX_DESIGN_MCP_ROOT=/path/to/ix-design-mcp")
+        raise FileNotFoundError(f"Required paths not found: {', '.join(missing_paths)}")
+    
+    logger.info("All required paths validated successfully")
 
 
 def ensure_simulation_input_complete(input_data: Dict[str, Any], resin_type: str) -> Dict[str, Any]:
@@ -179,6 +182,47 @@ def ensure_simulation_input_complete(input_data: Dict[str, Any], resin_type: str
         if 'resin_type' not in vessel_config:
             vessel_config['resin_type'] = resin_type
             logger.info(f"Added missing resin_type: {resin_type}")
+        
+        # Add number_service if missing
+        if 'number_service' not in vessel_config:
+            vessel_config['number_service'] = 1
+            logger.info("Added missing number_service: 1")
+        
+        # Add number_standby if missing
+        if 'number_standby' not in vessel_config:
+            vessel_config['number_standby'] = 1
+            logger.info("Added missing number_standby: 1")
+        
+        # Calculate resin_volume_m3 from bed_volume_L if missing
+        if 'resin_volume_m3' not in vessel_config:
+            if 'bed_volume_L' in vessel_config:
+                vessel_config['resin_volume_m3'] = vessel_config['bed_volume_L'] / 1000.0
+                logger.info(f"Calculated resin_volume_m3: {vessel_config['resin_volume_m3']:.2f} m³")
+            else:
+                # Calculate from diameter and bed depth if available
+                if 'diameter_m' in vessel_config and 'bed_depth_m' in vessel_config:
+                    import math
+                    area = math.pi * (vessel_config['diameter_m'] / 2) ** 2
+                    volume_m3 = area * vessel_config['bed_depth_m']
+                    vessel_config['resin_volume_m3'] = volume_m3
+                    vessel_config['bed_volume_L'] = volume_m3 * 1000
+                    logger.info(f"Calculated resin_volume_m3: {volume_m3:.2f} m³")
+        
+        # Calculate freeboard_m if missing
+        if 'freeboard_m' not in vessel_config:
+            bed_depth = vessel_config.get('bed_depth_m', 1.5)
+            expansion_percent = vessel_config.get('bed_expansion_percent', 50.0)
+            # Freeboard = bed_depth * expansion_percent / 100 + 0.3m safety
+            vessel_config['freeboard_m'] = bed_depth * expansion_percent / 100 + 0.3
+            logger.info(f"Calculated freeboard_m: {vessel_config['freeboard_m']:.2f} m")
+        
+        # Calculate vessel_height_m if missing
+        if 'vessel_height_m' not in vessel_config:
+            bed_depth = vessel_config.get('bed_depth_m', 1.5)
+            freeboard = vessel_config.get('freeboard_m', 1.5)
+            # Add 0.3m for bottom support and 0.3m for top distributor
+            vessel_config['vessel_height_m'] = bed_depth + freeboard + 0.61
+            logger.info(f"Calculated vessel_height_m: {vessel_config['vessel_height_m']:.2f} m")
     
     # Ensure regeneration_config exists with defaults
     if 'regeneration_config' not in input_data or not input_data['regeneration_config']:
@@ -230,9 +274,6 @@ def ensure_simulation_input_complete(input_data: Dict[str, Any], resin_type: str
             }
     
     return input_data
-        raise FileNotFoundError(f"Required paths not found: {', '.join(missing_paths)}")
-    
-    logger.info("All required paths validated successfully")
 
 
 # Register tools with enhanced metadata
