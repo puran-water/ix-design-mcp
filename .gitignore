@@ -122,6 +122,31 @@ SOPHISTICATED_*.md
 WATER_*.md
 FILES_FOR_PUBLIC_REPO.md
 
+# PHREEQC temporary files
+*.pqi
+*.pqo
+*.sel
+transport.sel
+selected_output_*.sel
+
+# Environment files (keep only .env for user reference)
+.env.*
+.env.unified
+.env.windows
+.env.wsl
+.env.README.md
+
+# Test scripts (not needed for MCP server runtime)
+tests/*.py
+!tests/__init__.py
+tests/debug/
+tests/regeneration_diagnostics/
+tests/fixtures/
+tests/*.json
+tests/*.txt
+tests/*.pqi
+tests/*.pqo
+
 # Test results
 test_results_*.json
 *_results.json
