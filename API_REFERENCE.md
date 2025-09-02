@@ -4,6 +4,12 @@
 
 The IX Design MCP Server provides four primary tools for ion exchange system design and simulation, supporting both SAC (Strong Acid Cation) and WAC (Weak Acid Cation) resins. All tools communicate via JSON and include comprehensive error handling.
 
+## Performance Metrics Update (v2.0.1)
+
+**Critical Change**: Performance metrics now provide both **breakthrough values** (for equipment design) and **average values** (for operational estimates). Breakthrough values represent worst-case performance at the end of the service cycle and are essential for proper equipment sizing. Average values represent cycle-average performance for economic analysis.
+
+This ensures equipment is sized for actual breakthrough water quality, not misleading cycle averages that could result in undersized systems.
+
 ## Tools
 
 ### 1. configure_sac_ix
@@ -185,6 +191,27 @@ Performs Direct PHREEQC simulation to predict breakthrough curves, determine ope
       }
     ]
   },
+  "performance_metrics": {
+    // Critical breakthrough values for equipment design (v2.0.1+)
+    "breakthrough_ca_removal_percent": number,  // Ca removal at breakthrough
+    "breakthrough_mg_removal_percent": number,  // Mg removal at breakthrough  
+    "breakthrough_hardness_removal_percent": number,  // Total hardness at BT
+    "breakthrough_alkalinity_removal_percent": number,  // Alkalinity at BT (WAC)
+    // Average values for operational estimates
+    "avg_ca_removal_percent": number,  // Average Ca removal over cycle
+    "avg_mg_removal_percent": number,  // Average Mg removal over cycle
+    "avg_hardness_removal_percent": number,  // Average hardness removal
+    "avg_alkalinity_removal_percent": number,  // Average alkalinity removal (WAC)
+    // Additional performance metrics
+    "average_effluent_ph": number,  // Average pH over cycle
+    "min_effluent_ph": number,  // Minimum pH reached
+    "max_effluent_ph": number,  // Maximum pH reached
+    "co2_generation_mg_l": number,  // Average CO2 generation (WAC H-form)
+    // H-form specific metrics
+    "active_sites_percent_final": number,  // Final active sites (WAC H-form only)
+    "temporary_hardness_removed_percent": number,  // Temp hardness removal
+    "permanent_hardness_removed_percent": number   // Perm hardness removal
+  },
   "regeneration_phase": {
     "regenerant_consumed_kg": number,  // Total regenerant used
     "regenerant_volume_L": number,  // Total volume
@@ -277,6 +304,24 @@ Performs PHREEQC simulation with WAC-specific chemistry, pH-dependent capacity, 
         "active_sites_percent": number  // H-form only
       }
     ]
+  },
+  "performance_metrics": {
+    // Same structure as SAC with WAC-specific metrics
+    "breakthrough_ca_removal_percent": number,
+    "breakthrough_mg_removal_percent": number,  
+    "breakthrough_hardness_removal_percent": number,
+    "breakthrough_alkalinity_removal_percent": number,  // Key for WAC
+    "avg_ca_removal_percent": number,
+    "avg_mg_removal_percent": number,
+    "avg_hardness_removal_percent": number,
+    "avg_alkalinity_removal_percent": number,
+    "average_effluent_ph": number,
+    "min_effluent_ph": number,
+    "max_effluent_ph": number,
+    "co2_generation_mg_l": number,  // WAC H-form specific
+    "active_sites_percent_final": number,  // WAC H-form only
+    "temporary_hardness_removed_percent": number,
+    "permanent_hardness_removed_percent": number
   },
   "regeneration_phase": {
     // Similar to SAC with additions for two-step:

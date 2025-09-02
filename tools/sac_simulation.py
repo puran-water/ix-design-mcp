@@ -55,6 +55,24 @@ from .base_ix_simulation import BaseIXSimulation
 logger = logging.getLogger(__name__)
 
 
+class SACPerformanceMetrics(BaseModel):
+    """SAC performance metrics with breakthrough and average values"""
+    # Breakthrough metrics (worst case for design)
+    breakthrough_ca_removal_percent: float
+    breakthrough_mg_removal_percent: float
+    breakthrough_hardness_removal_percent: float
+    
+    # Average metrics (for operational estimates)
+    avg_ca_removal_percent: float
+    avg_mg_removal_percent: float
+    avg_hardness_removal_percent: float
+    
+    # pH statistics
+    average_effluent_ph: float = Field(default=7.8)
+    min_effluent_ph: float = Field(default=7.0)
+    max_effluent_ph: float = Field(default=8.5)
+
+
 class RegenerationConfig(BaseModel):
     """Configuration for multi-stage regeneration (always enabled for full cycle simulation)"""
     enabled: bool = Field(True, description="Always enabled for full cycle simulation")
@@ -249,6 +267,7 @@ class SACSimulationOutput(BaseModel):
     phreeqc_determined_capacity_factor: float  # NOT heuristic
     capacity_utilization_percent: float
     breakthrough_data: Dict[str, Any]  # Enhanced for multi-phase plotting (changed to Any to allow phases)
+    performance_metrics: SACPerformanceMetrics  # Added performance metrics
     simulation_details: Dict[str, Any]
     # Regeneration results (always included in full cycle simulation)
     regeneration_results: RegenerationResults  # No longer optional
@@ -2250,6 +2269,14 @@ def _run_service_only_simulation(input_data: SACSimulationInput) -> SACSimulatio
     # Regenerant based on bed volume (from config)
     regenerant_kg = bed_volume_L / 1000 * CONFIG.REGENERANT_DOSE_KG_M3
     
+    # Calculate performance metrics
+    performance_metrics = _calculate_sac_performance_metrics(
+        curves=curves,
+        bv_array=bv_array,
+        breakthrough_bv=breakthrough_bv,
+        water=water
+    )
+    
     return SACSimulationOutput(
         status="success" if breakthrough_found else "warning",
         breakthrough_bv=round(breakthrough_bv, 1),
@@ -2260,6 +2287,7 @@ def _run_service_only_simulation(input_data: SACSimulationInput) -> SACSimulatio
         phreeqc_determined_capacity_factor=round(phreeqc_competition_factor, 2),
         capacity_utilization_percent=round(actual_capacity_utilization * 100, 1),
         breakthrough_data=breakthrough_data,
+        performance_metrics=performance_metrics,
         simulation_details={
             "bed_volume_L": bed_volume_L,
             "theoretical_bv": round(theoretical_bv, 1),
@@ -2325,6 +2353,33 @@ def _run_full_cycle_simulation(input_data: SACSimulationInput) -> SACSimulationO
         # Calculate total cycle time
         total_cycle_time = service_time_hours + regen_results.regeneration_time_hours
         
+        # Calculate performance metrics from service phase data
+        service_indices = [i for i, phase in enumerate(cycle_data.get('phases', [])) if phase == 'SERVICE']
+        if service_indices:
+            service_curves = {
+                'Ca': np.array([cycle_data['ca_mg_l'][i] for i in service_indices]),
+                'Mg': np.array([cycle_data['mg_mg_l'][i] for i in service_indices]),
+                'Hardness': np.array([cycle_data['hardness_mg_l'][i] for i in service_indices])
+            }
+            service_bv = np.array([cycle_data['bed_volumes'][i] for i in service_indices])
+            
+            performance_metrics = _calculate_sac_performance_metrics(
+                curves=service_curves,
+                bv_array=service_bv,
+                breakthrough_bv=breakthrough_bv,
+                water=water
+            )
+        else:
+            # Fallback if no service phase data
+            performance_metrics = SACPerformanceMetrics(
+                breakthrough_ca_removal_percent=0,
+                breakthrough_mg_removal_percent=0,
+                breakthrough_hardness_removal_percent=0,
+                avg_ca_removal_percent=0,
+                avg_mg_removal_percent=0,
+                avg_hardness_removal_percent=0
+            )
+        
         return SACSimulationOutput(
             status="success" if breakthrough_found else "warning",
             breakthrough_bv=round(breakthrough_bv, 1),
@@ -2335,6 +2390,7 @@ def _run_full_cycle_simulation(input_data: SACSimulationInput) -> SACSimulationO
             phreeqc_determined_capacity_factor=round(actual_capacity_utilization, 2),
             capacity_utilization_percent=round(actual_capacity_utilization * 100, 1),
             breakthrough_data=cycle_data,  # Now includes all phases
+            performance_metrics=performance_metrics,
             simulation_details={
                 "bed_volume_L": vessel.bed_volume_L,
                 "theoretical_bv": round(theoretical_bv, 1),
@@ -2437,3 +2493,89 @@ def _smart_sample_cycle_data(cycle_data: Dict[str, Any], regen_config: Regenerat
     logger.info(f"  - Data reduction: {(1 - len(indices_to_keep)/total_points)*100:.1f}%")
     
     return sampled_data
+
+
+def _calculate_sac_performance_metrics(
+    curves: Dict[str, np.ndarray],
+    bv_array: np.ndarray,
+    breakthrough_bv: float,
+    water: SACWaterComposition
+) -> SACPerformanceMetrics:
+    """Calculate performance metrics at breakthrough and as averages.
+    
+    Args:
+        curves: Dictionary with 'Ca', 'Mg', 'Hardness' arrays (mg/L)
+        bv_array: Bed volumes array
+        breakthrough_bv: BV at which breakthrough occurs
+        water: Feed water composition
+        
+    Returns:
+        SACPerformanceMetrics with breakthrough and average values
+    """
+    # Find index at breakthrough
+    breakthrough_idx = np.searchsorted(bv_array, breakthrough_bv, side='left')
+    breakthrough_idx = min(max(0, breakthrough_idx), len(bv_array) - 1)
+    
+    # Handle edge cases
+    if breakthrough_idx > 0 and breakthrough_idx < len(bv_array) - 1:
+        # Linear interpolation for exact breakthrough value
+        bv_before = bv_array[breakthrough_idx - 1]
+        bv_after = bv_array[breakthrough_idx]
+        if bv_after > bv_before:
+            fraction = (breakthrough_bv - bv_before) / (bv_after - bv_before)
+        else:
+            fraction = 0
+    else:
+        fraction = 0
+    
+    # Get feed concentrations
+    feed_ca = water.ca_mg_l
+    feed_mg = water.mg_mg_l
+    feed_hardness = feed_ca * 2.5 + feed_mg * 4.1  # Convert to CaCO3
+    
+    # Calculate breakthrough removals (at the breakthrough point)
+    if breakthrough_idx > 0 and fraction > 0:
+        # Interpolate values at exact breakthrough
+        ca_at_bt = curves['Ca'][breakthrough_idx - 1] + fraction * (curves['Ca'][breakthrough_idx] - curves['Ca'][breakthrough_idx - 1])
+        mg_at_bt = curves['Mg'][breakthrough_idx - 1] + fraction * (curves['Mg'][breakthrough_idx] - curves['Mg'][breakthrough_idx - 1])
+        hardness_at_bt = curves['Hardness'][breakthrough_idx - 1] + fraction * (curves['Hardness'][breakthrough_idx] - curves['Hardness'][breakthrough_idx - 1])
+    else:
+        ca_at_bt = curves['Ca'][breakthrough_idx] if 'Ca' in curves else curves.get('ca_mg_l', [0])[breakthrough_idx]
+        mg_at_bt = curves['Mg'][breakthrough_idx] if 'Mg' in curves else curves.get('mg_mg_l', [0])[breakthrough_idx]
+        hardness_at_bt = curves['Hardness'][breakthrough_idx] if 'Hardness' in curves else curves.get('hardness_mg_l', [0])[breakthrough_idx]
+    
+    breakthrough_ca_removal = (1 - ca_at_bt / feed_ca) * 100 if feed_ca > 0 else 0
+    breakthrough_mg_removal = (1 - mg_at_bt / feed_mg) * 100 if feed_mg > 0 else 0
+    breakthrough_hardness_removal = (1 - hardness_at_bt / feed_hardness) * 100 if feed_hardness > 0 else 0
+    
+    # Calculate BV-weighted averages up to breakthrough
+    if breakthrough_idx > 0:
+        # Use trapezoidal integration for BV-weighted average
+        bv_to_bt = bv_array[:breakthrough_idx + 1]
+        ca_to_bt = curves['Ca'][:breakthrough_idx + 1] if 'Ca' in curves else curves.get('ca_mg_l', [])[: breakthrough_idx + 1]
+        mg_to_bt = curves['Mg'][:breakthrough_idx + 1] if 'Mg' in curves else curves.get('mg_mg_l', [])[:breakthrough_idx + 1]
+        hardness_to_bt = curves['Hardness'][:breakthrough_idx + 1] if 'Hardness' in curves else curves.get('hardness_mg_l', [])[:breakthrough_idx + 1]
+        
+        # Calculate removals at each point
+        ca_removals = (1 - ca_to_bt / feed_ca) * 100 if feed_ca > 0 else np.zeros_like(ca_to_bt)
+        mg_removals = (1 - mg_to_bt / feed_mg) * 100 if feed_mg > 0 else np.zeros_like(mg_to_bt)
+        hardness_removals = (1 - hardness_to_bt / feed_hardness) * 100 if feed_hardness > 0 else np.zeros_like(hardness_to_bt)
+        
+        # BV-weighted average using trapezoidal rule
+        avg_ca_removal = np.trapz(ca_removals, bv_to_bt) / breakthrough_bv if breakthrough_bv > 0 else 0
+        avg_mg_removal = np.trapz(mg_removals, bv_to_bt) / breakthrough_bv if breakthrough_bv > 0 else 0
+        avg_hardness_removal = np.trapz(hardness_removals, bv_to_bt) / breakthrough_bv if breakthrough_bv > 0 else 0
+    else:
+        # If breakthrough at first point, use that value
+        avg_ca_removal = breakthrough_ca_removal
+        avg_mg_removal = breakthrough_mg_removal
+        avg_hardness_removal = breakthrough_hardness_removal
+    
+    return SACPerformanceMetrics(
+        breakthrough_ca_removal_percent=max(0, min(100, breakthrough_ca_removal)),
+        breakthrough_mg_removal_percent=max(0, min(100, breakthrough_mg_removal)),
+        breakthrough_hardness_removal_percent=max(0, min(100, breakthrough_hardness_removal)),
+        avg_ca_removal_percent=max(0, min(100, avg_ca_removal)),
+        avg_mg_removal_percent=max(0, min(100, avg_mg_removal)),
+        avg_hardness_removal_percent=max(0, min(100, avg_hardness_removal))
+    )

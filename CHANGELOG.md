@@ -2,6 +2,37 @@
 
 All notable changes to the IX Design MCP Server will be documented in this file.
 
+## [2.0.1] - 2025-09-02 - Critical Performance Metrics Fix
+
+### Fixed
+
+#### Performance Metrics Calculation - Critical Equipment Design Issue
+- **CRITICAL FIX**: Performance metrics now correctly report breakthrough values instead of misleading averages
+- Modified `_calculate_performance_metrics` to use breakthrough point values for equipment design
+- Added `_index_at_bv` helper method to find array indices at specific bed volumes
+- Performance metrics now include both breakthrough (worst-case for design) and average (operational) values
+- **Impact**: Prevents undersized equipment that would fail to meet water quality specifications
+
+#### Metrics Structure Changes
+- Added breakthrough-specific metrics: `breakthrough_ca_removal_percent`, `breakthrough_mg_removal_percent`, etc.
+- Added average metrics: `avg_ca_removal_percent`, `avg_mg_removal_percent`, etc.
+- WAC H-form now correctly shows ~85% alkalinity removal at breakthrough vs 99.996% average
+- WAC Na-form shows correct hardness removal limited by permanent hardness
+- SAC maintains proper breakthrough detection at target hardness
+
+#### Technical Implementation
+- `_index_at_bv()` method uses `np.searchsorted` for efficient BV index lookup
+- Breakthrough calculations use actual effluent quality at breakthrough point
+- Average calculations use service cycle averages for operational estimates
+- Proper bounds checking and error handling for edge cases
+
+### Why This Fix Was Critical
+Equipment must be sized for **end-of-cycle water quality**, not cycle averages. A resin bed averaging 99% removal but achieving only 85% at breakthrough will fail specifications. This fix ensures:
+1. Vessels are properly sized for actual breakthrough performance
+2. Downstream equipment receives acceptable feed quality throughout the cycle  
+3. Design margins account for real-world performance degradation
+4. No risk of undersized systems that cannot meet water quality targets
+
 ## [2.0.0] - 2025-01-18
 
 ### Added
