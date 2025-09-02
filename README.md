@@ -317,7 +317,7 @@ python /path/to/ix-design-mcp/server.py
 }
 ```
 
-### Example Simulation Response with Enhancements
+### Example Simulation Response with Breakthrough vs Average Metrics
 
 ```json
 {
@@ -330,6 +330,20 @@ python /path/to/ix-design-mcp/server.py
     "total_hardness_removed_kg": 45.2,
     "mtz_length_m": 0.25,  // Mass transfer zone
     "effective_bed_depth_m": 1.95
+  },
+  "performance_metrics": {
+    // Critical breakthrough values for equipment design
+    "breakthrough_ca_removal_percent": 87.5,
+    "breakthrough_mg_removal_percent": 82.1,
+    "breakthrough_hardness_removal_percent": 85.2,
+    "breakthrough_alkalinity_removal_percent": 84.8,  // WAC H-form example
+    // Average operational values for economics
+    "avg_ca_removal_percent": 99.8,
+    "avg_mg_removal_percent": 99.9,
+    "avg_hardness_removal_percent": 99.85,
+    "avg_alkalinity_removal_percent": 99.996,
+    "average_effluent_ph": 6.2,
+    "co2_generation_mg_l": 45
   },
   "regeneration_phase": {
     "regenerant_consumed_kg": 120.5,
@@ -420,6 +434,22 @@ This MCP server is designed to power process engineering AI agents by providing:
 - **Temperature Range**: 5-40°C (corrections applied outside 20-30°C)
 
 ### Performance Metrics
+
+#### Critical Design Metrics Update (v2.0.1)
+Performance metrics now correctly report **breakthrough values** (worst-case) for equipment design instead of misleading averages:
+
+- **Breakthrough Metrics**: Values at the breakthrough point when target is reached
+  - Used for equipment sizing and design (worst-case scenarios)
+  - WAC H-form: ~85% alkalinity removal at breakthrough
+  - SAC: 100% hardness removal at target breakthrough
+- **Average Metrics**: Average performance over the service cycle
+  - Used for operational estimates and economic analysis
+  - WAC H-form: 99.996% average alkalinity removal
+  - Much higher than breakthrough values due to excellent initial performance
+
+This ensures proper equipment sizing based on end-of-cycle quality, not optimistic averages.
+
+#### General Performance Characteristics
 - **Breakthrough Definition**: Target hardness/alkalinity (not 50% breakthrough)
 - **Capacity Utilization**: 
   - SAC: 30-60% depending on water quality

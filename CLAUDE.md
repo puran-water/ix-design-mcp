@@ -75,6 +75,49 @@ Created `BaseIXSimulation` abstract class to implement enhancements once and sha
 2. **MTZ at Low Flows**: MTZ calculation may exceed bed depth at very low flows. Solution: Cap MTZ at 50% of bed depth.
 3. **H-form Active Sites**: MOL("HX") can return negative values. Solution: Use post-processing validation.
 
+### Performance Metrics Fix (v2.0.1) - Critical Equipment Design Issue
+
+#### The Problem
+The original metrics calculation was reporting **average removal values** instead of **breakthrough values**. This created a critical equipment design flaw:
+- WAC H-form showed 99.996% average alkalinity removal
+- WAC H-form showed only ~85% alkalinity removal at breakthrough
+- Equipment sized on averages would be **undersized** for end-of-cycle water quality
+
+#### Root Cause
+The `_calculate_performance_metrics` method was calculating averages over the first half of the breakthrough curve, not values at the actual breakthrough point.
+
+#### Solution Implemented
+1. **Added `_index_at_bv` Helper Method**: Finds array indices at specific bed volumes using `np.searchsorted`
+2. **Dual Metrics Structure**: Metrics now include both:
+   - `breakthrough_*`: Values at breakthrough point (for equipment design)
+   - `avg_*`: Average values over service cycle (for operational estimates)
+3. **Breakthrough-Based Design**: Equipment sizing now uses worst-case breakthrough values
+
+#### Technical Implementation
+```python
+def _index_at_bv(self, data: Dict[str, np.ndarray], breakthrough_bv: float) -> int:
+    """Find array index corresponding to breakthrough BV"""
+    bvs = data.get('BV', data.get('bv', np.array([])))
+    idx = np.searchsorted(bvs, breakthrough_bv, side='left')
+    return min(max(0, idx), len(bvs) - 1)
+
+# Use breakthrough index for design metrics
+breakthrough_idx = self._index_at_bv(breakthrough_data, breakthrough_bv)
+ca_at_breakthrough = ca_eff[breakthrough_idx]
+ca_removal = 100 * (1 - ca_at_breakthrough / feed_ca)
+```
+
+#### Impact
+- **Equipment Design**: Now correctly sized for worst-case (breakthrough) water quality
+- **Economic Analysis**: Still provides average values for operational cost estimates  
+- **Safety**: Eliminates risk of undersized systems that fail to meet water quality targets
+
+#### Why This Was Critical
+In industrial water treatment, equipment must handle **end-of-cycle water quality**, not cycle averages. A resin bed that averages 99% removal but only achieves 85% at breakthrough will fail water quality specifications before regeneration. This fix ensures:
+1. Vessels are properly sized for actual breakthrough performance
+2. Downstream equipment (RO, etc.) receives acceptable feed quality throughout the cycle
+3. Design margins account for real-world performance degradation
+
 ### Future Improvements
 1. **Kinetic Models**: Add intraparticle diffusion for more accurate MTZ
 2. **Fouling Prediction**: ML-based fouling factor from water quality
