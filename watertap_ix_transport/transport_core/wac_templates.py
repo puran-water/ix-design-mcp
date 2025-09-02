@@ -52,6 +52,7 @@ def create_wac_na_phreeqc_input(
     
     # Calculate key parameters
     bed_volume_L = vessel_config['bed_volume_L']
+    bed_depth_m = vessel_config.get('bed_depth_m', 1.5)  # Get bed depth for TRANSPORT
     flow_rate_L_hr = water_composition.get('flow_m3_hr', 100) * 1000
     
     # Cell volume and porosity
@@ -112,6 +113,10 @@ def create_wac_na_phreeqc_input(
         # Use default WAC-Na exchange species
         exchange_species_block = f"""# WAC-specific exchange reactions with enhanced selectivity
 EXCHANGE_SPECIES
+    # Identity reaction for master species (required)
+    X- = X-
+        log_k 0.0
+    
     Na+ + X- = NaX
         log_k 0.0
     
@@ -148,12 +153,12 @@ SOLUTION 0 Feed water
     N(5)      {water_composition.get('no3_mg_l', 0)} as NO3
     water     1 kg
 
-# Initial column solution (low TDS water)
+# Initial column solution (strong NaCl to ensure Na-form)
 SOLUTION 1-{cells} Initial column water
     temp      {water_composition.get('temperature_celsius', 25)}
     pH        7.0
-    Na        10
-    Cl        10 charge
+    Na        1000
+    Cl        1000 charge
     water     {water_per_cell_kg} kg
 
 # WAC exchanger in Na form
@@ -168,7 +173,7 @@ TRANSPORT
     -time_step {time_per_shift * 3600}  # seconds
     -flow_direction forward
     -boundary_conditions flux flux
-    -lengths  {cells}*{cell_volume_L/1000}  # m3
+    -lengths  {cells}*{bed_depth_m/cells}  # m (geometric length per cell)
     -dispersivities {cells}*0.002  # m
     -porosities {cells}*{porosity}
     -punch_cells {cells}
@@ -188,7 +193,7 @@ SELECTED_OUTPUT 1
     -saturation_indices Calcite Aragonite Dolomite
 
 USER_PUNCH 1
-    -headings BV Cell Ca_mg/L Mg_mg/L Na_mg/L Hardness_mg/L pH Alk_mg/L CO2_mg/L
+    -headings BV Cell Ca_mg/L Mg_mg/L Na_mg/L Hardness_mg/L pH Alk_CaCO3_mg/L CO2_mg/L
     -start
     10 REM BV calculation: volume passed / total bed volume
     20 BV = STEP_NO * {water_per_cell_kg} / {bed_volume_L}
@@ -203,8 +208,8 @@ USER_PUNCH 1
     110 hardness_caco3 = ca_mg * 2.5 + mg_mg * 4.1
     120 PUNCH hardness_caco3
     130 PUNCH -LA("H+")
-    140 PUNCH ALK * 61000
-    150 PUNCH TOT("C(4)") * 44010
+    140 PUNCH ALK * 50044  # Convert to mg/L as CaCO3
+    150 PUNCH MOL("CO2") * 44010  # Actual CO2, not total carbonate
     200 REM end
     -end
 
@@ -245,6 +250,7 @@ def create_wac_h_phreeqc_input(
     
     # Calculate key parameters
     bed_volume_L = vessel_config['bed_volume_L']
+    bed_depth_m = vessel_config.get('bed_depth_m', 1.5)  # Get bed depth for TRANSPORT
     flow_rate_L_hr = water_composition.get('flow_m3_hr', 100) * 1000
     
     # Cell volume and porosity
@@ -313,6 +319,10 @@ def create_wac_h_phreeqc_input(
         # Use default WAC-H exchange species
         exchange_species_block = f"""# WAC H-form exchange reactions with H+ release
 EXCHANGE_SPECIES
+    # Identity reaction for master species (required)
+    X- = X-
+        log_k 0.0
+    
     # H+ is reference species for H-form resin
     H+ + X- = HX
         log_k 0.0
@@ -365,10 +375,10 @@ SOLUTION 1-{cells} Initial column water
     Cl        0.01 charge  # Small amount of Cl- to balance H+ at pH 5.5
     water     {water_per_cell_kg} kg
 
-# WAC exchanger - start with X-, equilibrate with acidic solution to form HX
+# WAC exchanger - initialize as H-form via equilibration
 EXCHANGE 1-{cells}
-    X         {exchange_per_kg_water}
     -equilibrate with solution 1-{cells}
+    X         {exchange_per_kg_water}
 
 # Transport simulation
 TRANSPORT
@@ -377,7 +387,7 @@ TRANSPORT
     -time_step {time_per_shift * 3600}  # seconds
     -flow_direction forward
     -boundary_conditions flux flux
-    -lengths  {cells}*{cell_volume_L/1000}  # m3
+    -lengths  {cells}*{bed_depth_m/cells}  # m (geometric length per cell)
     -dispersivities {cells}*0.002  # m
     -porosities {cells}*{porosity}
     -punch_cells {cells}
@@ -397,7 +407,7 @@ SELECTED_OUTPUT 1
     -saturation_indices Calcite Aragonite Dolomite
 
 USER_PUNCH 1
-    -headings BV Cell Ca_mg/L Mg_mg/L Na_mg/L Hardness_mg/L pH Alk_mg/L CO2_mg/L Active_Sites_% Removal_%
+    -headings BV Cell Ca_mg/L Mg_mg/L Na_mg/L Hardness_mg/L pH Alk_CaCO3_mg/L CO2_mg/L Active_Sites_% Removal_%
     -start
     10 REM BV calculation: volume passed / total bed volume
     20 BV = STEP_NO * {water_per_cell_kg} / {bed_volume_L}
@@ -415,7 +425,7 @@ USER_PUNCH 1
     140 alk_mg = ALK * 61000
     145 IF (alk_mg < 0) THEN alk_mg = 0
     150 PUNCH alk_mg
-    160 co2_mg = MOL("CO2") * 44010 * 1000
+    160 co2_mg = MOL("CO2") * 44010  # MOL is mol/kgw, MW=44010 mg/mol
     170 PUNCH co2_mg
     # Calculate active sites percentage based on HX fraction
     # HX mol/kg water, need to compare to total exchange per kg water
@@ -467,6 +477,7 @@ def create_wac_h_surface_phreeqc_input(
     
     # Calculate key parameters
     bed_volume_L = vessel_config['bed_volume_L']
+    bed_depth_m = vessel_config.get('bed_depth_m', 1.5)  # Get bed depth for TRANSPORT
     flow_rate_L_hr = water_composition.get('flow_m3_hr', 100) * 1000
     
     # Cell volume and porosity
@@ -567,7 +578,7 @@ TRANSPORT
     -time_step {time_per_shift * 3600}  # seconds
     -flow_direction forward
     -boundary_conditions flux flux
-    -lengths  {cells}*{cell_volume_L/1000}  # m3
+    -lengths  {cells}*{bed_depth_m/cells}  # m (geometric length per cell)
     -dispersivities {cells}*0.002  # m
     -porosities {cells}*{porosity}
     -punch_cells {cells}
@@ -587,7 +598,7 @@ SELECTED_OUTPUT 1
     -saturation_indices Calcite Aragonite Dolomite
 
 USER_PUNCH 1
-    -headings BV Cell Ca_mg/L Mg_mg/L Na_mg/L Hardness_mg/L pH Alk_mg/L CO2_mg/L Active_Sites_% Ca_Removal_%
+    -headings BV Cell Ca_mg/L Mg_mg/L Na_mg/L Hardness_mg/L pH Alk_CaCO3_mg/L CO2_mg/L Active_Sites_% Ca_Removal_%
     -start
     10 REM BV calculation: volume passed / total bed volume
     20 BV = STEP_NO * {water_per_cell_kg} / {bed_volume_L}
@@ -605,7 +616,7 @@ USER_PUNCH 1
     140 alk_mg = ALK * 61000
     145 IF (alk_mg < 0) THEN alk_mg = 0
     150 PUNCH alk_mg
-    160 co2_mg = MOL("CO2") * 44010 * 1000
+    160 co2_mg = MOL("CO2") * 44010  # MOL is mol/kgw, MW=44010 mg/mol
     170 PUNCH co2_mg
     # Calculate active sites percentage based on Wac_sO- fraction
     180 wac_so_mol = MOL("Wac_sO-")

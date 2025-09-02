@@ -868,8 +868,10 @@ async def simulate_wac_ix(simulation_input: str) -> Dict[str, Any]:
         # Parse input JSON
         input_data = json.loads(simulation_input)
         
-        # Get resin type for validation
-        resin_type = input_data.get('vessel_configuration', {}).get('resin_type', 'WAC_Na')
+        # Get resin type - check top level first, then vessel_configuration
+        resin_type = input_data.get('resin_type')
+        if not resin_type:
+            resin_type = input_data.get('vessel_configuration', {}).get('resin_type', 'WAC_Na')
         
         # Ensure all required fields are present
         input_data = ensure_simulation_input_complete(input_data, resin_type)

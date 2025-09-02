@@ -1,0 +1,117 @@
+WARNING: Database file from DATABASE keyword is used; command line argument ignored.
+   Input file: test_wac_h_simple.pqi
+  Output file: test_wac_h_simple.pqo
+Database file: C:\Program Files\USGS\phreeqc-3.8.6-17100-x64\database\phreeqc.dat
+
+------------------
+Reading data base.
+------------------
+
+	SOLUTION_MASTER_SPECIES
+	SOLUTION_SPECIES
+	PHASES
+	GAS_BINARY_PARAMETERS
+	EXCHANGE_MASTER_SPECIES
+	EXCHANGE_SPECIES
+	SURFACE_MASTER_SPECIES
+	SURFACE_SPECIES
+	MEAN_GAMMAS
+	RATES
+	END
+------------------------------------
+Reading input data for simulation 1.
+------------------------------------
+
+	DATABASE C:\Program Files\USGS\phreeqc-3.8.6-17100-x64\database\phreeqc.dat
+	SOLUTION 1
+	    temp      25
+	    pH        5.5
+	    Cl        0.01 charge
+	    water     1 kg
+	EXCHANGE 1
+	    equilibrate with solution 1
+	    X         1.0
+	SELECTED_OUTPUT
+	    molalities HX CaX2 MgX2 NaX
+	END
+WARNING: Did not find species, HX.
+-------------------------------------------
+Beginning of initial solution calculations.
+-------------------------------------------
+
+Initial solution 1.	
+
+-----------------------------Solution composition------------------------------
+
+	Elements           Molality       Moles
+
+	Cl                3.166e-06   3.166e-06  Charge balance
+
+----------------------------Description of solution----------------------------
+
+                                       pH  =   5.500    
+                                       pe  =   4.000    
+      Specific Conductance (µS/cm,  25°C)  = 1
+                          Density (g/cm³)  =   0.99704
+                               Volume (L)  =   1.00297
+                        Viscosity (mPa s)  =   0.89003
+                        Activity of water  =   1.000
+                 Ionic strength (mol/kgw)  =   3.169e-06
+                       Mass of water (kg)  =   1.000e+00
+                 Total alkalinity (eq/kg)  =  -3.166e-06
+                         Temperature (°C)  =  25.00
+                  Electrical balance (eq)  =  -5.128e-18
+ Percent error, 100*(Cat-|An|)/(Cat+|An|)  =  -0.00
+                               Iterations  =   7
+                                  Total H  = 1.110124e+02
+                                  Total O  = 5.550622e+01
+
+----------------------------Distribution of species----------------------------
+
+                                               Log       Log       Log    mole V
+   Species          Molality    Activity  Molality  Activity     Gamma   cm³/mol
+
+   H+              3.169e-06   3.162e-06    -5.499    -5.500    -0.001      0.00
+   OH-             3.207e-09   3.201e-09    -8.494    -8.495    -0.001     -4.14
+   H2O             5.551e+01   1.000e+00     1.744    -0.000     0.000     18.07
+Cl            3.166e-06
+   Cl-             3.166e-06   3.159e-06    -5.500    -5.500    -0.001     18.05
+   HCl             3.441e-12   3.441e-12   -11.463   -11.463     0.000     (0)  
+H(0)          1.416e-22
+   H2              7.079e-23   7.079e-23   -22.150   -22.150     0.000     28.61
+O(0)          0.000e+00
+   O2              0.000e+00   0.000e+00   -48.080   -48.080     0.000     30.40
+
+------------------------------Saturation indices-------------------------------
+
+  Phase               SI** log IAP   log K(298 K,   1 atm)
+
+  H2(g)           -19.05    -22.15   -3.10  H2
+  H2O(g)           -1.50     -0.00    1.50  H2O
+  O2(g)           -45.19    -48.08   -2.89  O2
+
+**For a gas, SI = log10(fugacity). Fugacity = pressure * phi / 1 atm.
+  For ideal gases, phi = 1.
+
+-------------------------------------------------------
+Beginning of initial exchange-composition calculations.
+-------------------------------------------------------
+
+Exchange 1.	
+
+WARNING: Maximum iterations exceeded, 100
+
+WARNING: The program has failed to converge to a numerical solution.
+
+The following equations were not satisfied:
+ERROR:                   Cl has not converged. Total: 3.165657e-06	Calculated: 3.173713e-06	Residual: -8.055995e-09
+
+ERROR:                   Mu Ionic strength has not converged. 	Residual: 1.567391e-06
+
+ERROR:               A(H2O) Activity of water has not converged. 	Residual: 1.074081e-07
+
+ERROR:                    X Exchanger mass balance has not converged. 	Residual: 1.000000e+00
+
+
+ERROR: Model failed to converge for initial exchange calculation.
+Stopping.

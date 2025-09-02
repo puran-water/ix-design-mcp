@@ -12,6 +12,8 @@ from typing import Dict, List, Optional, Tuple
 import logging
 from pathlib import Path
 import functools
+import platform
+import sys
 from ..species_alias import phreeqc_to_pyomo, pyomo_to_phreeqc
 
 logger = logging.getLogger(__name__)
@@ -22,14 +24,46 @@ class DirectPhreeqcEngine:
     Direct interface to PHREEQC executable, bypassing Python wrapper
     """
     
-    def __init__(self, phreeqc_path: Optional[str] = None, keep_temp_files: bool = False, default_timeout_s: int = 90):
+    @staticmethod
+    def get_platform_path(path: str) -> str:
+        """
+        Convert paths for platform compatibility.
+        
+        Args:
+            path: Path to convert
+            
+        Returns:
+            Platform-appropriate path
+        """
+        if not path:
+            return path
+            
+        # Check if we're in WSL
+        is_wsl = 'microsoft' in platform.uname().release.lower() if hasattr(platform.uname(), 'release') else False
+        
+        if sys.platform == 'win32':
+            # Running on Windows - use as-is
+            return path
+        elif is_wsl:
+            # Running in WSL - convert Windows paths if needed
+            if path.startswith('C:\\') or path.startswith('c:\\'):
+                # Convert C:\path to /mnt/c/path
+                converted = path.replace('C:\\', '/mnt/c/').replace('c:\\', '/mnt/c/').replace('\\', '/')
+                logger.debug(f"Converted Windows path to WSL: {path} -> {converted}")
+                return converted
+        
+        # Unix/Linux or already correct path
+        return path
+    
+    def __init__(self, phreeqc_path: Optional[str] = None, keep_temp_files: bool = False, default_timeout_s: int = 600):
         """
         Initialize direct PHREEQC interface
         
         Args:
             phreeqc_path: Path to PHREEQC executable. If None, searches common locations
             keep_temp_files: If True, don't delete temporary files (for debugging)
-            default_timeout_s: Default timeout for PHREEQC subprocess calls (seconds)
+            default_timeout_s: Default timeout for PHREEQC subprocess calls (seconds). 
+                Default is 600s (10 minutes) for complex simulations
         """
         # Get timeout from environment or use default
         self.default_timeout_s = int(os.environ.get('PHREEQC_RUN_TIMEOUT_S', str(default_timeout_s)))
@@ -84,21 +118,30 @@ class DirectPhreeqcEngine:
         if not path:
             return False
         
-        # On Windows, reject POSIX paths
-        if os.name == 'nt':
+        # Check if we're in WSL
+        is_wsl = 'microsoft' in platform.uname().release.lower() if hasattr(platform.uname(), 'release') else False
+        
+        if is_wsl:
+            # WSL can handle both Windows and Unix paths
+            # Convert Windows paths to WSL format if needed
+            check_path = self.get_platform_path(path)
+        elif os.name == 'nt':
+            # On Windows, reject POSIX paths
             if self._is_posix_path(path):
                 logger.debug(f"Rejecting POSIX path on Windows: {path}")
                 return False
-        # On Unix/Linux, reject Windows paths
+            check_path = path
         else:
+            # On Unix/Linux, reject Windows paths
             if self._is_windows_path(path):
                 logger.debug(f"Rejecting Windows path on Unix: {path}")
                 return False
+            check_path = path
         
         # Check if path actually exists
-        exists = os.path.exists(path)
+        exists = os.path.exists(check_path)
         if not exists:
-            logger.debug(f"Path does not exist: {path}")
+            logger.debug(f"Path does not exist: {check_path}")
         return exists
     
     def _find_phreeqc_executable(self, custom_path: Optional[str] = None) -> Optional[str]:
@@ -126,11 +169,19 @@ class DirectPhreeqcEngine:
                 r"C:\Program Files\phreeqc\phreeqc.exe",
             ])
         else:
-            # Unix/Linux paths
+            # Unix/Linux/WSL paths
+            # Get home directory dynamically
+            home_dir = os.path.expanduser("~")
             candidates.extend([
+                # User symlinks (highest priority for WSL)
+                os.path.join(home_dir, "phreeqc", "bin", "phreeqc"),
+                # Standard Unix locations
                 "/usr/local/bin/phreeqc",
                 "/usr/bin/phreeqc",
+                # Legacy location
                 "/home/hvksh/process/phreeqc/bin/phreeqc",
+                # Direct Windows path from WSL (fallback)
+                "/mnt/c/Program Files/USGS/phreeqc-3.8.6-17100-x64/bin/Release/phreeqc.exe",
             ])
         
         # Check each candidate
@@ -182,11 +233,19 @@ class DirectPhreeqcEngine:
                 exe_dir = os.path.dirname(self.phreeqc_exe)
                 candidates.append(os.path.join(exe_dir, "..", "database", "phreeqc.dat"))
         else:
-            # Unix/Linux paths
+            # Unix/Linux/WSL paths
+            # Get home directory dynamically
+            home_dir = os.path.expanduser("~")
             candidates.extend([
+                # User symlinks (highest priority for WSL)
+                os.path.join(home_dir, "phreeqc", "database", "phreeqc.dat"),
+                # Standard Unix locations
                 "/usr/local/share/phreeqc/database/phreeqc.dat",
                 "/usr/share/phreeqc/database/phreeqc.dat",
+                # Legacy location
                 "/home/hvksh/process/phreeqc/share/doc/phreeqc/database/phreeqc.dat",
+                # Direct Windows path from WSL (fallback)
+                "/mnt/c/Program Files/USGS/phreeqc-3.8.6-17100-x64/database/phreeqc.dat",
             ])
         
         # Check each candidate
@@ -355,7 +414,8 @@ class DirectPhreeqcEngine:
             logger.error(f"PHREEQC subprocess timed out after {run_timeout} seconds")
             raise RuntimeError(
                 f"PHREEQC simulation timed out after {run_timeout} seconds. "
-                f"Consider simplifying the simulation or increasing PHREEQC_RUN_TIMEOUT_S."
+                f"This is normal for complex ion exchange simulations which can take 5+ minutes. "
+                f"Set PHREEQC_RUN_TIMEOUT_S environment variable to a higher value (e.g., 600 for 10 minutes)."
             )
             
         finally:
