@@ -1,0 +1,100 @@
+
+DATABASE C:\Program Files\USGS\phreeqc-3.8.6-17100-x64\database\phreeqc.dat
+
+# WAC-specific exchange reactions with enhanced selectivity
+EXCHANGE_SPECIES
+    # Identity reaction for master species (required)
+    X- = X-
+        log_k 0.0
+    
+    Na+ + X- = NaX
+        log_k 0.0
+    
+    Ca+2 + 2X- = CaX2
+        log_k 1.3
+        -gamma 5.0 0.165
+    
+    Mg+2 + 2X- = MgX2
+        log_k 1.1
+        -gamma 5.5 0.2
+    
+    K+ + X- = KX
+        log_k 0.25
+        -gamma 3.5 0.015
+
+# Feed solution
+SOLUTION 0 Feed water
+    temp      25
+    pH        7.8
+    units     mg/L
+    Ca        80.06
+    Mg        24.29
+    Na        838.9
+    K         0
+    Cl        1435 charge
+    Alkalinity 121.95 as HCO3
+    S(6)      0 as SO4
+    N(5)      0 as NO3
+    water     1 kg
+
+# Initial column solution (strong NaCl to ensure Na-form)
+SOLUTION 1-5 Initial column water
+    temp      25
+    pH        7.0
+    Na        1000
+    Cl        1000 charge
+    water     500.0 kg
+
+# WAC exchanger in Na form
+EXCHANGE 1-5
+    X         4.5
+    -equilibrate with solution 1-5
+
+# Transport simulation
+TRANSPORT
+    -cells    5
+    -shifts   125
+    -time_step 225.0  # seconds
+    -flow_direction forward
+    -boundary_conditions flux flux
+    -lengths  5*0.3  # m (geometric length per cell)
+    -dispersivities 5*0.002  # m
+    -porosities 5*0.4
+    -punch_cells 5
+    -punch_frequency 1
+
+# Output for breakthrough curves
+SELECTED_OUTPUT 1
+    -file transport.sel
+    -reset false
+    -solution true
+    -time true
+    -step true
+    -pH true
+    -alkalinity true
+    -totals Ca Mg Na K Cl C(4) S(6)
+    -molalities H+ OH- CO2 HCO3- CO3-2
+    -saturation_indices Calcite Aragonite Dolomite
+
+USER_PUNCH 1
+    -headings BV Cell Ca_mg/L Mg_mg/L Na_mg/L Hardness_mg/L pH Alk_CaCO3_mg/L CO2_mg/L
+    -start
+    10 REM BV calculation: volume passed / total bed volume
+    20 BV = STEP_NO * 500.0 / 6250.0
+    30 IF (STEP_NO <= 0) THEN GOTO 200
+    40 PUNCH BV, CELL_NO
+    50 ca_mg = TOT("Ca") * 40.078 * 1000
+    60 mg_mg = TOT("Mg") * 24.305 * 1000
+    70 na_mg = TOT("Na") * 22.990 * 1000
+    80 PUNCH ca_mg
+    90 PUNCH mg_mg
+    100 PUNCH na_mg
+    110 hardness_caco3 = ca_mg * 2.5 + mg_mg * 4.1
+    120 PUNCH hardness_caco3
+    130 PUNCH -LA("H+")
+    140 PUNCH ALK * 50044  # Convert to mg/L as CaCO3
+    150 PUNCH MOL("CO2") * 44010  # Actual CO2, not total carbonate
+    200 REM end
+    -end
+
+END

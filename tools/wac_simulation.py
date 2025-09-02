@@ -94,15 +94,26 @@ class WACSimulationInput(BaseModel):
 
 
 class WACPerformanceMetrics(BaseModel):
-    """WAC-specific performance metrics"""
-    ca_removal_percent: float
-    mg_removal_percent: float
-    total_hardness_removal_percent: float
-    alkalinity_removal_percent: float
+    """WAC-specific performance metrics with breakthrough and average values"""
+    # Breakthrough metrics (worst case for design)
+    breakthrough_ca_removal_percent: float
+    breakthrough_mg_removal_percent: float
+    breakthrough_hardness_removal_percent: float
+    breakthrough_alkalinity_removal_percent: float
+    
+    # Average metrics (for operational estimates)
+    avg_ca_removal_percent: float
+    avg_mg_removal_percent: float
+    avg_hardness_removal_percent: float
+    avg_alkalinity_removal_percent: float
+    
+    # pH and CO2 statistics
     average_effluent_ph: float
     min_effluent_ph: float
     max_effluent_ph: float
     co2_generation_mg_l: float
+    
+    # Additional metrics
     active_sites_percent_final: Optional[float] = None  # For H-form
     temporary_hardness_removed_percent: Optional[float] = None
     permanent_hardness_removed_percent: Optional[float] = None
@@ -820,9 +831,10 @@ END
     def _calculate_performance_metrics(
         self, 
         breakthrough_data: Dict[str, np.ndarray],
-        water_analysis: WACWaterComposition
+        water_analysis: WACWaterComposition,
+        breakthrough_bv: float
     ) -> WACPerformanceMetrics:
-        """Calculate WAC-specific performance metrics."""
+        """Calculate WAC-specific performance metrics at breakthrough and average."""
         # Get feed concentrations
         feed_ca = water_analysis.ca_mg_l
         feed_mg = water_analysis.mg_mg_l
@@ -830,19 +842,83 @@ END
         feed_hardness = feed_ca * 2.5 + feed_mg * 4.1
         feed_alkalinity = water_analysis.hco3_mg_l / CONFIG.HCO3_EQUIV_WEIGHT * CONFIG.ALKALINITY_EQUIV_WEIGHT
         
-        # Get effluent data
+        # Get effluent data arrays
         ca_eff = breakthrough_data.get('Ca_mg/L', np.array([]))
         mg_eff = breakthrough_data.get('Mg_mg/L', np.array([]))
         hardness_eff = breakthrough_data.get('Hardness_mg/L', np.array([]))
-        alk_eff = breakthrough_data.get('Alk_mg/L', np.array([]))
+        # Handle both old and new alkalinity keys
+        alk_eff = breakthrough_data.get('Alk_CaCO3_mg/L', breakthrough_data.get('Alk_mg/L', np.array([])))
         ph_eff = breakthrough_data.get('pH', np.array([]))
         co2_eff = breakthrough_data.get('CO2_mg/L', np.array([]))
+        bvs = breakthrough_data.get('BV', breakthrough_data.get('bv', np.array([])))
         
-        # Calculate removal percentages
-        ca_removal = 100 * (1 - np.mean(ca_eff[:len(ca_eff)//2]) / feed_ca) if feed_ca > 0 and len(ca_eff) > 0 else 0
-        mg_removal = 100 * (1 - np.mean(mg_eff[:len(mg_eff)//2]) / feed_mg) if feed_mg > 0 and len(mg_eff) > 0 else 0
-        hardness_removal = 100 * (1 - np.mean(hardness_eff[:len(hardness_eff)//2]) / feed_hardness) if feed_hardness > 0 and len(hardness_eff) > 0 else 0
-        alk_removal = 100 * (1 - np.mean(alk_eff[:len(alk_eff)//2]) / feed_alkalinity) if feed_alkalinity > 0 and len(alk_eff) > 0 else 0
+        # Get breakthrough index
+        breakthrough_idx = self._index_at_bv(breakthrough_data, breakthrough_bv)
+        
+        # Calculate AT BREAKTHROUGH removals (for design - worst case)
+        if len(ca_eff) > 0 and feed_ca > 0:
+            ca_at_breakthrough = ca_eff[breakthrough_idx] if breakthrough_idx < len(ca_eff) else ca_eff[-1]
+            ca_removal = 100 * (1 - ca_at_breakthrough / feed_ca)
+            ca_removal = max(0, min(100, ca_removal))  # Clamp to [0, 100]
+        else:
+            ca_removal = 0
+        
+        if len(mg_eff) > 0 and feed_mg > 0:
+            mg_at_breakthrough = mg_eff[breakthrough_idx] if breakthrough_idx < len(mg_eff) else mg_eff[-1]
+            mg_removal = 100 * (1 - mg_at_breakthrough / feed_mg)
+            mg_removal = max(0, min(100, mg_removal))
+        else:
+            mg_removal = 0
+        
+        if len(hardness_eff) > 0 and feed_hardness > 0:
+            hardness_at_breakthrough = hardness_eff[breakthrough_idx] if breakthrough_idx < len(hardness_eff) else hardness_eff[-1]
+            hardness_removal = 100 * (1 - hardness_at_breakthrough / feed_hardness)
+            hardness_removal = max(0, min(100, hardness_removal))
+        else:
+            hardness_removal = 0
+        
+        if len(alk_eff) > 0 and feed_alkalinity > 0:
+            # Handle negative alkalinity at low pH by treating as zero
+            alk_at_breakthrough = max(0, alk_eff[breakthrough_idx] if breakthrough_idx < len(alk_eff) else alk_eff[-1])
+            alk_removal = 100 * (1 - alk_at_breakthrough / feed_alkalinity)
+            alk_removal = max(0, min(100, alk_removal))
+        else:
+            alk_removal = 0
+        
+        # Calculate BV-WEIGHTED AVERAGE removals (for operations/mass balance)
+        avg_ca_removal = 0
+        avg_mg_removal = 0
+        avg_hardness_removal = 0
+        avg_alk_removal = 0
+        
+        if len(bvs) > 0 and breakthrough_idx > 0:
+            # Use trapezoidal integration for BV-weighted average
+            bvs_to_breakthrough = bvs[:breakthrough_idx+1]
+            
+            if len(ca_eff) > breakthrough_idx and feed_ca > 0:
+                ca_to_breakthrough = ca_eff[:breakthrough_idx+1]
+                avg_ca = np.trapz(ca_to_breakthrough, bvs_to_breakthrough) / breakthrough_bv if breakthrough_bv > 0 else 0
+                avg_ca_removal = 100 * (1 - avg_ca / feed_ca)
+                avg_ca_removal = max(0, min(100, avg_ca_removal))
+            
+            if len(mg_eff) > breakthrough_idx and feed_mg > 0:
+                mg_to_breakthrough = mg_eff[:breakthrough_idx+1]
+                avg_mg = np.trapz(mg_to_breakthrough, bvs_to_breakthrough) / breakthrough_bv if breakthrough_bv > 0 else 0
+                avg_mg_removal = 100 * (1 - avg_mg / feed_mg)
+                avg_mg_removal = max(0, min(100, avg_mg_removal))
+            
+            if len(hardness_eff) > breakthrough_idx and feed_hardness > 0:
+                hardness_to_breakthrough = hardness_eff[:breakthrough_idx+1]
+                avg_hardness = np.trapz(hardness_to_breakthrough, bvs_to_breakthrough) / breakthrough_bv if breakthrough_bv > 0 else 0
+                avg_hardness_removal = 100 * (1 - avg_hardness / feed_hardness)
+                avg_hardness_removal = max(0, min(100, avg_hardness_removal))
+            
+            if len(alk_eff) > breakthrough_idx and feed_alkalinity > 0:
+                # Treat negative alkalinity as zero for average calculation
+                alk_to_breakthrough = np.maximum(0, alk_eff[:breakthrough_idx+1])
+                avg_alk = np.trapz(alk_to_breakthrough, bvs_to_breakthrough) / breakthrough_bv if breakthrough_bv > 0 else 0
+                avg_alk_removal = 100 * (1 - avg_alk / feed_alkalinity)
+                avg_alk_removal = max(0, min(100, avg_alk_removal))
         
         # pH statistics
         avg_ph = np.mean(ph_eff) if len(ph_eff) > 0 else 7.0
@@ -867,19 +943,29 @@ END
             expected_hardness_removal = (temp_hardness / feed_hardness) * 100 if feed_hardness > 0 else 0
             # Use the lower of calculated or expected removal
             hardness_removal = min(hardness_removal, expected_hardness_removal)
+            avg_hardness_removal = min(avg_hardness_removal, expected_hardness_removal)
         
+        # Temporary hardness removal based on alkalinity at breakthrough
         temp_removal = alk_removal if temp_hardness > 0 else 0
         perm_removal = 0  # WAC cannot remove permanent hardness
         
         return WACPerformanceMetrics(
-            ca_removal_percent=ca_removal,
-            mg_removal_percent=mg_removal,
-            total_hardness_removal_percent=hardness_removal,
-            alkalinity_removal_percent=alk_removal,
+            # Breakthrough metrics (for design)
+            breakthrough_ca_removal_percent=ca_removal,
+            breakthrough_mg_removal_percent=mg_removal,
+            breakthrough_hardness_removal_percent=hardness_removal,
+            breakthrough_alkalinity_removal_percent=alk_removal,
+            # Average metrics (for operations)
+            avg_ca_removal_percent=avg_ca_removal,
+            avg_mg_removal_percent=avg_mg_removal,
+            avg_hardness_removal_percent=avg_hardness_removal,
+            avg_alkalinity_removal_percent=avg_alk_removal,
+            # pH and CO2 stats
             average_effluent_ph=avg_ph,
             min_effluent_ph=min_ph,
             max_effluent_ph=max_ph,
             co2_generation_mg_l=avg_co2,
+            # Additional metrics
             active_sites_percent_final=final_active,
             temporary_hardness_removed_percent=temp_removal,
             permanent_hardness_removed_percent=perm_removal
@@ -982,7 +1068,7 @@ class WacNaSimulation(BaseWACSimulation):
         service_time_hours = breakthrough_bv * bed_volume_m3 / flow_rate_m3_hr if flow_rate_m3_hr > 0 else 0
         
         # Calculate performance metrics
-        performance_metrics = self._calculate_performance_metrics(breakthrough_data, water)
+        performance_metrics = self._calculate_performance_metrics(breakthrough_data, water, breakthrough_bv)
         
         # Calculate capacity utilization
         theoretical_capacity = CONFIG.WAC_NA_WORKING_CAPACITY * vessel.bed_volume_L
@@ -1057,7 +1143,7 @@ class WacNaSimulation(BaseWACSimulation):
                 'ca_mg_l': sampled_data.get('Ca_mg/L', np.array([])).tolist(),
                 'mg_mg_l': sampled_data.get('Mg_mg/L', np.array([])).tolist(),
                 'na_mg_l': sampled_data.get('Na_mg/L', np.array([])).tolist(),
-                'alkalinity_mg_l': sampled_data.get('Alk_mg/L', np.array([])).tolist(),
+                'alkalinity_mg_l': sampled_data.get('Alk_CaCO3_mg/L', sampled_data.get('Alk_mg/L', np.array([]))).tolist(),
                 'ph': sampled_data.get('pH', np.array([])).tolist()
             },
             performance_metrics=performance_metrics,
@@ -1213,7 +1299,7 @@ class WacHSimulation(BaseWACSimulation):
         # Use shared detection method with multiple criteria in priority order
         criteria = [
             # Primary: Alkalinity breakthrough
-            ('Alk_mg/L', target_alkalinity, 'gt'),
+            ('Alk_CaCO3_mg/L', target_alkalinity, 'gt'),  # Now using CaCO3 units
             # Secondary: Hardness breakthrough (in case alkalinity is already low)
             ('Hardness_mg/L', target_hardness, 'gt')
             # Note: Active sites % not reliable for breakthrough detection
@@ -1235,7 +1321,7 @@ class WacHSimulation(BaseWACSimulation):
         service_time_hours = breakthrough_bv * bed_volume_m3 / flow_rate_m3_hr if flow_rate_m3_hr > 0 else 0
         
         # Calculate performance metrics
-        performance_metrics = self._calculate_performance_metrics(breakthrough_data, water)
+        performance_metrics = self._calculate_performance_metrics(breakthrough_data, water, breakthrough_bv)
         
         # Calculate capacity utilization
         theoretical_capacity = CONFIG.WAC_H_WORKING_CAPACITY * vessel.bed_volume_L
@@ -1269,7 +1355,8 @@ class WacHSimulation(BaseWACSimulation):
         final_hardness = breakthrough_data.get(hardness_key, np.array([]))
         final_hardness_value = float(final_hardness[-1]) if len(final_hardness) > 0 else target_hardness
         
-        final_alkalinity = breakthrough_data.get('Alk_mg/L', np.array([]))
+        # Handle both old and new alkalinity keys
+        final_alkalinity = breakthrough_data.get('Alk_CaCO3_mg/L', breakthrough_data.get('Alk_mg/L', np.array([])))
         final_alkalinity_value = float(final_alkalinity[-1]) if len(final_alkalinity) > 0 else target_alkalinity
         
         # Prepare output
@@ -1286,7 +1373,7 @@ class WacHSimulation(BaseWACSimulation):
             breakthrough_data={
                 'bv': sampled_data.get('BV', np.array([])).tolist(),
                 'hardness_mg_l': sampled_data.get(hardness_key, np.array([])).tolist(),
-                'alkalinity_mg_l': sampled_data.get('Alk_mg/L', np.array([])).tolist(),
+                'alkalinity_mg_l': sampled_data.get('Alk_CaCO3_mg/L', sampled_data.get('Alk_mg/L', np.array([]))).tolist(),
                 'ca_mg_l': sampled_data.get('Ca_mg/L', np.array([])).tolist(),
                 'mg_mg_l': sampled_data.get('Mg_mg/L', np.array([])).tolist(),
                 'na_mg_l': sampled_data.get('Na_mg/L', np.array([])).tolist(),

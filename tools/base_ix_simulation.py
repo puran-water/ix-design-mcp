@@ -434,6 +434,38 @@ class BaseIXSimulation(ABC):
             "simulation_details": {"error": str(error)}
         }
     
+    def _index_at_bv(self, data: Dict[str, np.ndarray], breakthrough_bv: float) -> int:
+        """
+        Find array index corresponding to a given BV value.
+        
+        Args:
+            data: Dictionary containing breakthrough data with 'BV' key
+            breakthrough_bv: The bed volume value to find index for
+            
+        Returns:
+            Index in arrays corresponding to breakthrough_bv
+            Returns last index if BV beyond range or if arrays missing
+        """
+        bvs = data.get('BV', data.get('bv', np.array([])))
+        if len(bvs) == 0:
+            logger.warning("No BV data found in breakthrough data")
+            return 0
+        
+        # Use searchsorted to find index where breakthrough_bv would be inserted
+        idx = np.searchsorted(bvs, breakthrough_bv, side='left')
+        
+        # Clamp to valid range [0, len-1]
+        idx = min(max(0, idx), len(bvs) - 1)
+        
+        # If we're at the end but breakthrough_bv is less than last BV,
+        # find the closest BV
+        if idx == len(bvs) - 1 and breakthrough_bv < bvs[-1]:
+            # Find closest BV value
+            closest_idx = np.argmin(np.abs(bvs - breakthrough_bv))
+            return closest_idx
+        
+        return idx
+    
     # Universal Enhancement Methods
     
     def calculate_ionic_strength(self, water_composition: Dict[str, float]) -> float:
@@ -786,9 +818,10 @@ class BaseIXSimulation(ABC):
         if resin_type == 'SAC':
             # SAC uses Na+ as reference (log_k = 0)
             reactions = [
+                ("X- = X-", 0.0, 0, 0),  # Identity reaction for master species
                 ("Na+ + X- = NaX", 0.0, 0, 0),  # Reference
-                ("Ca+2 + 2X- = CaX2", 4.0, 2, enthalpies.get('Ca_Na', -8.0)),  # High selectivity for Ca
-                ("Mg+2 + 2X- = MgX2", 3.5, 2, enthalpies.get('Mg_Na', -6.0)),  # High selectivity for Mg
+                ("Ca+2 + 2X- = CaX2", 0.8, 2, enthalpies.get('Ca_Na', -8.0)),  # PHREEQC database value
+                ("Mg+2 + 2X- = MgX2", 0.6, 2, enthalpies.get('Mg_Na', -6.0)),  # PHREEQC database value
                 ("K+ + X- = KX", 1.5, 0, enthalpies.get('K_Na', -2.0)),   # Moderate selectivity for K
                 ("H+ + X- = HX", 1.3, 0, enthalpies.get('H_Na', -3.0)),   # Moderate selectivity for H
             ]
@@ -796,6 +829,7 @@ class BaseIXSimulation(ABC):
         elif resin_type == 'WAC_Na':
             # WAC Na-form uses Na+ as reference
             reactions = [
+                ("X- = X-", 0.0, 0, 0),  # Identity reaction for master species
                 ("Na+ + X- = NaX", 0.0, 0, 0),  # Reference
                 ("Ca+2 + 2X- = CaX2", CONFIG.WAC_LOGK_CA_NA, 2, enthalpies.get('Ca_Na', -8.0)),
                 ("Mg+2 + 2X- = MgX2", CONFIG.WAC_LOGK_MG_NA, 2, enthalpies.get('Mg_Na', -6.0)),
@@ -806,6 +840,7 @@ class BaseIXSimulation(ABC):
         elif resin_type == 'WAC_H':
             # WAC H-form uses H+ as reference
             reactions = [
+                ("X- = X-", 0.0, 0, 0),  # Identity reaction for master species
                 ("H+ + X- = HX", 0.0, 0, 0),  # Reference
                 ("Ca+2 + 2HX = CaX2 + 2H+", CONFIG.WAC_LOGK_CA_H, 2, enthalpies.get('Ca_H', 4.0)),
                 ("Mg+2 + 2HX = MgX2 + 2H+", CONFIG.WAC_LOGK_MG_H, 2, enthalpies.get('Mg_H', 3.0)),
