@@ -68,47 +68,9 @@ def run_watertap_smoke_test(timeout_seconds: int = 30) -> bool:
     Returns:
         True if smoke test passes, False otherwise
     """
-    import concurrent.futures
-    import multiprocessing
-    
-    def smoke_test_worker():
-        """Worker function for smoke test in separate process."""
-        try:
-            from pyomo.environ import ConcreteModel
-            from idaes.core import FlowsheetBlock
-            from watertap.property_models.multicomp_aq_sol_prop_pack import MCASParameterBlock
-            
-            # Create minimal model
-            m = ConcreteModel()
-            m.fs = FlowsheetBlock(dynamic=False)
-            
-            # Create minimal MCAS property package
-            m.fs.properties = MCASParameterBlock(
-                solute_list=["Na_+", "Cl_-"],
-                mw_data={"H2O": 18e-3, "Na_+": 23e-3, "Cl_-": 35.45e-3},
-                charge={"Na_+": 1, "Cl_-": -1},
-                diffusivity_data={("Liq", "Na_+"): 1e-9, ("Liq", "Cl_-"): 1e-9}
-            )
-            
-            # If we get here, basic WaterTAP components work
-            return True
-        except Exception as e:
-            logger.debug(f"Smoke test failed: {e}")
-            return False
-    
-    try:
-        # Use process pool to allow hard timeout
-        ctx = multiprocessing.get_context('spawn')  # Use spawn for Windows compatibility
-        with concurrent.futures.ProcessPoolExecutor(max_workers=1, mp_context=ctx) as executor:
-            future = executor.submit(smoke_test_worker)
-            result = future.result(timeout=timeout_seconds)
-            return result
-    except concurrent.futures.TimeoutError:
-        logger.warning(f"WaterTAP smoke test timed out after {timeout_seconds} seconds")
-        return False
-    except Exception as e:
-        logger.warning(f"WaterTAP smoke test failed: {e}")
-        return False
+    # Use the isolated smoke test from process_isolation module
+    from utils.process_isolation import test_watertap_availability_isolated
+    return test_watertap_availability_isolated(timeout_seconds)
 
 
 def simulate_ix_hybrid(
@@ -163,8 +125,43 @@ def simulate_ix_hybrid(
     
     try:
         # Step 1: Run PHREEQC simulation for chemistry
-        logger.info("[Step 1/4] Running PHREEQC simulation for chemistry")
-        phreeqc_results = run_phreeqc_engine(ix_input)
+        # Determine regeneration mode preference from raw input (if provided)
+        requested_regen_mode: Optional[str] = None
+        if isinstance(simulation_input, dict):
+            # Accept multiple ways to specify optimization explicitly
+            # Priority: top-level regeneration_config.mode > cycle.regeneration_mode > cycle.mode
+            try:
+                rc = simulation_input.get("regeneration_config") or {}
+                cyc = simulation_input.get("cycle") or {}
+
+                mode_raw = (
+                    rc.get("mode")
+                    or cyc.get("regeneration_mode")
+                    or cyc.get("mode")
+                )
+
+                if isinstance(mode_raw, str):
+                    mode_norm = mode_raw.strip().lower()
+                    if mode_norm in {"staged_optimize", "optimize", "optimization", "opt"}:
+                        requested_regen_mode = "staged_optimize"
+                    elif mode_norm in {"staged_fixed", "fixed", "fixed_bv", "fixed_staged"}:
+                        requested_regen_mode = "staged_fixed"
+                    else:
+                        # Unrecognized value; ignore and use default
+                        logger.warning(
+                            f"Unrecognized regeneration mode '{mode_raw}', defaulting to staged_fixed"
+                        )
+                        requested_regen_mode = None
+            except Exception:
+                # Be robust to unexpected shapes
+                requested_regen_mode = None
+
+        # Always default to staged_fixed unless explicitly requested
+        logger.info(
+            f"[Step 1/4] Running PHREEQC simulation for chemistry (regen_mode="
+            f"{requested_regen_mode or 'staged_fixed'})"
+        )
+        phreeqc_results = run_phreeqc_engine(ix_input, requested_regen_mode=requested_regen_mode)
         
         if phreeqc_results.get("status") == "error":
             raise RuntimeError(f"PHREEQC failed: {phreeqc_results.get('message')}")
@@ -204,38 +201,37 @@ def simulate_ix_hybrid(
                 logger.warning(f"WaterTAP import failed, falling back to PHREEQC: {e}")
 
         if watertap_available:
-            # Step 2: Build WaterTAP flowsheet
-            logger.info("[Step 2/4] Building WaterTAP flowsheet")
-            wrapper = IXWaterTAPWrapper()
+            # Step 2: Run WaterTAP in isolated process with timeout
+            logger.info("[Step 2/4] Running WaterTAP flowsheet in isolated process")
+            
+            # Import process isolation
+            from utils.process_isolation import run_watertap_with_timeout
             
             # Prepare feed composition for WaterTAP
             feed_composition = ix_input.water.get_ion_dict()
             flow_rate_m3h = ix_input.water.flow_m3h
             vessel_config = ix_input.vessel.model_dump()
             
-            model = wrapper.build_flowsheet(
+            # Run WaterTAP with 60-second timeout
+            watertap_result = run_watertap_with_timeout(
                 feed_composition,
                 flow_rate_m3h,
-                vessel_config
+                vessel_config,
+                phreeqc_results,
+                timeout_seconds=60
             )
             
-            # Step 3: Inject PHREEQC results and solve
-            logger.info("[Step 3/4] Injecting PHREEQC results into flowsheet")
-            wrapper.inject_phreeqc_results(phreeqc_results)
-            
-            if not wrapper.solve_flowsheet():
-                logger.warning("WaterTAP solve failed, continuing with PHREEQC results only")
-                watertap_solved = False
-            else:
+            if watertap_result.get("status") == "success":
+                logger.info("[Step 3/4] WaterTAP flowsheet solved successfully")
                 watertap_solved = True
-            
-            # Step 4: Apply costing
-            logger.info("[Step 4/4] Applying WaterTAP costing")
-            if watertap_solved:
-                pricing = ix_input.pricing.model_dump() if ix_input.pricing else None
-                economics = wrapper.apply_costing(pricing)
+                economics = watertap_result.get("economics", {})
+            elif watertap_result.get("status") == "timeout":
+                logger.warning(f"[Step 3/4] WaterTAP timed out: {watertap_result.get('message')}")
+                watertap_solved = False
+                economics = estimate_costs_from_phreeqc(phreeqc_results, ix_input)
             else:
-                # Fallback: estimate costs from PHREEQC results
+                logger.warning(f"[Step 3/4] WaterTAP failed: {watertap_result.get('message')}")
+                watertap_solved = False
                 economics = estimate_costs_from_phreeqc(phreeqc_results, ix_input)
         else:
             # WaterTAP not available: estimate costs and mark not solved
@@ -309,7 +305,10 @@ def simulate_ix_hybrid(
         }
 
 
-def run_phreeqc_engine(ix_input: IXSimulationInput) -> Dict[str, Any]:
+def run_phreeqc_engine(
+    ix_input: IXSimulationInput,
+    requested_regen_mode: Optional[Literal["staged_fixed", "staged_optimize"]] = None,
+) -> Dict[str, Any]:
     """
     Run PHREEQC simulation based on resin type.
     
@@ -322,6 +321,16 @@ def run_phreeqc_engine(ix_input: IXSimulationInput) -> Dict[str, Any]:
     # Prepare input for legacy PHREEQC tools
     # Extract ions from the unified dict or individual fields
     ions = ix_input.water.get_ion_dict()
+    # Determine regeneration mode: default to staged_fixed to avoid slow optimization
+    regen_mode = (
+        requested_regen_mode if requested_regen_mode in ["staged_fixed", "staged_optimize"] else "staged_fixed"
+    )
+
+    if regen_mode == "staged_optimize":
+        logger.info("Regeneration mode explicitly set to staged_optimize (may be slow)")
+    else:
+        logger.info("Regeneration mode set to staged_fixed (default)")
+
     legacy_input = {
         "water_analysis": {
             "flow_m3_hr": ix_input.water.flow_m3h,
@@ -357,7 +366,9 @@ def run_phreeqc_engine(ix_input: IXSimulationInput) -> Dict[str, Any]:
             "concentration_percent": ix_input.cycle.regenerant_concentration_wt,
             "regenerant_dose_g_per_L": ix_input.cycle.regenerant_dose_g_per_l,
             "flow_direction": "back" if ix_input.cycle.flow_direction == "counter-current" else "forward",
-            "backwash_enabled": ix_input.cycle.backwash
+            "backwash_enabled": ix_input.cycle.backwash,
+            # Critical fix: default to staged_fixed to prevent long-running optimization
+            "mode": regen_mode
         },
         "full_data": ix_input.options.full_data if ix_input.options else False
     }
@@ -601,7 +612,8 @@ def get_git_sha() -> str:
             ['git', 'rev-parse', '--short', 'HEAD'],
             capture_output=True,
             text=True,
-            check=False
+            check=False,
+            timeout=2  # Add 2-second timeout to prevent hanging
         )
         if result.returncode == 0:
             return result.stdout.strip()
