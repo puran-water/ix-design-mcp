@@ -98,11 +98,14 @@ def simulate_ix_hybrid(
     start_time = datetime.now()
     t0 = time.perf_counter()
 
-    # Lightweight trace to Linux FS to avoid Windows/WSL log contention
+    # Lightweight trace to avoid Windows/WSL log contention
     def _trace(msg: str) -> None:
         try:
             ts = datetime.now().strftime('%H:%M:%S.%f')[:-3]
-            with open('/tmp/ix-hybrid-trace.log', 'a', encoding='utf-8') as f:
+            # Use Windows temp path since Python is running on Windows
+            import tempfile
+            trace_file = os.path.join(tempfile.gettempdir(), 'ix-hybrid-trace.log')
+            with open(trace_file, 'a', encoding='utf-8') as f:
                 f.write(f"{ts} - {msg}\n")
         except Exception:
             pass
@@ -110,9 +113,11 @@ def simulate_ix_hybrid(
     _trace("simulate_ix_hybrid: start")
 
     # Install a watchdog that dumps thread traces if something blocks for too long
-    # This is diagnostic-only and harmless; it writes stacks to /tmp on WSL/Linux
+    # This is diagnostic-only and harmless
     try:
-        fh = open('/tmp/ix-hybrid-stacks.log', 'a', encoding='utf-8')
+        import tempfile
+        stack_file = os.path.join(tempfile.gettempdir(), 'ix-hybrid-stacks.log')
+        fh = open(stack_file, 'a', encoding='utf-8')
         # Dump every 120s until cancelled
         faulthandler.dump_traceback_later(120, repeat=True, file=fh)
     except Exception:
@@ -554,6 +559,7 @@ def compile_hybrid_results(
     Returns:
         Unified results conforming to IXSimulationResult schema
     """
+    logger.info("compile_hybrid_results: Entered function")
     # Extract performance metrics from PHREEQC
     perf_metrics = phreeqc_results.get("performance_metrics", {})
     regen_results = phreeqc_results.get("regeneration_results", {})
