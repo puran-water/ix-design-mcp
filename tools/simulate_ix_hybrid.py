@@ -39,6 +39,53 @@ from tools.sac_simulation import simulate_sac_phreeqc, SACSimulationInput
 from tools.wac_simulation import simulate_wac_system, WACSimulationInput
 
 logger = logging.getLogger(__name__)
+ 
+# Lightweight, non-blocking trace writer to OS temp (bypasses stderr logging)
+def _safe_trace(msg: str) -> None:
+    try:
+        import tempfile
+        ts = datetime.now().strftime('%H:%M:%S.%f')[:-3]
+        trace_file = os.path.join(tempfile.gettempdir(), 'ix-hybrid-trace.log')
+        with open(trace_file, 'a', encoding='utf-8') as f:
+            f.write(f"{ts} - {msg}\n")
+    except Exception:
+        # Never raise from tracing
+        pass
+
+
+def _as_plain_dict(obj: Any) -> Any:
+    """Best-effort conversion to a plain dict without importing heavy deps.
+
+    - dict -> dict (unchanged)
+    - Pydantic v2 BaseModel -> model_dump()
+    - Pydantic v1 BaseModel -> dict()
+    - Dataclass -> asdict()
+    - Mapping-like -> dict(items())
+    Otherwise returns the object unchanged.
+    """
+    try:
+        if isinstance(obj, dict):
+            return obj
+        # Try Pydantic v2
+        if hasattr(obj, 'model_dump') and callable(getattr(obj, 'model_dump')):
+            return obj.model_dump()
+        # Try Pydantic v1
+        if hasattr(obj, 'dict') and callable(getattr(obj, 'dict')):
+            return obj.dict()
+        # Try dataclasses
+        try:
+            import dataclasses
+            if dataclasses.is_dataclass(obj):
+                return dataclasses.asdict(obj)
+        except Exception:
+            pass
+        # Try mapping-like
+        if hasattr(obj, 'items') and callable(getattr(obj, 'items')):
+            return dict(obj.items())
+    except Exception:
+        # Fall through to return original object on any failure
+        pass
+    return obj
 
 
 def get_watertap_mode() -> Literal["off", "auto", "on"]:
@@ -452,9 +499,11 @@ def run_phreeqc_engine(
     if ix_input.resin_type == "SAC":
         sac_input = SACSimulationInput(**legacy_input)
         results = simulate_sac_phreeqc(sac_input)
-        # Convert to dict if needed
-        if hasattr(results, 'dict'):
+        # Convert to dict for downstream consumers (support Pydantic v1/v2)
+        if hasattr(results, 'model_dump') and callable(getattr(results, 'model_dump')):
             return results.model_dump()
+        if hasattr(results, 'dict') and callable(getattr(results, 'dict')):
+            return results.dict()
         return results
     
     elif ix_input.resin_type in ["WAC_Na", "WAC_H"]:
@@ -466,8 +515,10 @@ def run_phreeqc_engine(
         
         wac_input = WACSimulationInput(**legacy_input)
         results = simulate_wac_system(wac_input)
-        if hasattr(results, 'dict'):
+        if hasattr(results, 'model_dump') and callable(getattr(results, 'model_dump')):
             return results.model_dump()
+        if hasattr(results, 'dict') and callable(getattr(results, 'dict')):
+            return results.dict()
         return results
     
     else:
@@ -559,13 +610,27 @@ def compile_hybrid_results(
     Returns:
         Unified results conforming to IXSimulationResult schema
     """
+    # Use file trace first to avoid potential stderr blocking
+    _safe_trace("compile_hybrid_results: start")
     logger.info("compile_hybrid_results: Entered function")
+    
+    # Ensure inputs are plain dicts (defensive against BaseModel instances)
+    try:
+        phreeqc_results = _as_plain_dict(phreeqc_results)
+    except Exception:
+        pass
+    try:
+        economics = _as_plain_dict(economics)
+    except Exception:
+        pass
     # Extract performance metrics from PHREEQC
+    _safe_trace("compile_hybrid_results: extracting PHREEQC metrics")
     logger.info("Extracting PHREEQC metrics...")
     perf_metrics = phreeqc_results.get("performance_metrics", {})
     regen_results = phreeqc_results.get("regeneration_results", {})
     
     # Build performance metrics
+    _safe_trace("compile_hybrid_results: build PerformanceMetrics")
     logger.info("Building PerformanceMetrics...")
     performance = PerformanceMetrics(
         service_bv_to_target=phreeqc_results.get("breakthrough_bv", 0),
@@ -577,9 +642,11 @@ def compile_hybrid_results(
         sec_kwh_m3=economics.get("sec_kwh_m3", 0.05),
         capacity_utilization_percent=phreeqc_results.get("capacity_utilization_percent", 0)
     )
+    _safe_trace("compile_hybrid_results: PerformanceMetrics created")
     logger.info("PerformanceMetrics created")
     
     # Build ion tracking
+    _safe_trace("compile_hybrid_results: build IonTracking")
     logger.info("Building IonTracking...")
     ion_tracking = IonTracking(
         feed_mg_l=ix_input.water.get_ion_dict(),
@@ -591,9 +658,11 @@ def compile_hybrid_results(
             "hardness": perf_metrics.get("breakthrough_hardness_removal_percent", 0)
         }
     )
+    _safe_trace("compile_hybrid_results: IonTracking created")
     logger.info("IonTracking created")
     
     # Build mass balance
+    _safe_trace("compile_hybrid_results: build MassBalance")
     logger.info("Building MassBalance...")
     # Handle None values properly - ensure we always have numeric values
     hardness_eluted = regen_results.get("hardness_eluted_kg_caco3")
@@ -617,9 +686,11 @@ def compile_hybrid_results(
         hardness_removed_kg_caco3=hardness_val,
         closure_percent=99.0
     )
+    _safe_trace("compile_hybrid_results: MassBalance created")
     logger.info("MassBalance created")
     
     # Build economics result
+    _safe_trace("compile_hybrid_results: build EconomicsResult")
     logger.info("Building economics result...")
     unit_costs = UnitCosts(
         vessels_usd=economics.get("unit_costs", {}).get("vessels_usd", 0),
@@ -639,17 +710,21 @@ def compile_hybrid_results(
         sec_kwh_m3=economics.get("sec_kwh_m3", 0),
         unit_costs=unit_costs
     )
+    _safe_trace("compile_hybrid_results: EconomicsResult created")
     logger.info("EconomicsResult created")
     
     # Build solver info
+    _safe_trace("compile_hybrid_results: build SolverInfo")
     logger.info("Building SolverInfo...")
     solver_info = SolverInfo(
         engine="phreeqc_watertap_hybrid",
         termination_condition="optimal" if watertap_solved else "phreeqc_only"
     )
+    _safe_trace("compile_hybrid_results: SolverInfo created")
     logger.info("SolverInfo created")
     
     # Build execution context
+    _safe_trace("compile_hybrid_results: build ExecutionContext")
     logger.info("Building ExecutionContext...")
     git_sha = "unknown"
     try:
@@ -665,9 +740,11 @@ def compile_hybrid_results(
         watertap_version="0.11.0" if watertap_solved else None,
         git_sha=git_sha
     )
+    _safe_trace("compile_hybrid_results: ExecutionContext created")
     logger.info("ExecutionContext created")
     
     # Build engine info
+    _safe_trace("compile_hybrid_results: build EngineInfo")
     logger.info("Building EngineInfo...")
     engine_info = EngineInfo(
         name="phreeqc_watertap_hybrid",
@@ -677,14 +754,17 @@ def compile_hybrid_results(
         version="1.0.0",
         mode="service_regeneration"
     )
+    _safe_trace("compile_hybrid_results: EngineInfo created")
     logger.info("EngineInfo created")
     
     # Create result object
+    _safe_trace("compile_hybrid_results: create IXSimulationResult")
     logger.info("Creating IXSimulationResult object...")
     
     # Log breakthrough data size for debugging
     bd = phreeqc_results.get("breakthrough_data")
     if bd and isinstance(bd, list):
+        _safe_trace(f"compile_hybrid_results: breakthrough_data points={len(bd)}")
         logger.info(f"Breakthrough data has {len(bd)} points")
     
     result = IXSimulationResult(
@@ -707,26 +787,34 @@ def compile_hybrid_results(
         }
     )
     
+    _safe_trace("compile_hybrid_results: IXSimulationResult created -> model_dump")
     logger.info("IXSimulationResult object created, calling model_dump()...")
     result_dict = result.model_dump()
+    _safe_trace("compile_hybrid_results: model_dump complete")
     logger.info("model_dump() complete")
     
+    _safe_trace("compile_hybrid_results: end")
     return result_dict
 
 
 def get_git_sha() -> str:
     """Get current git SHA if available."""
-    try:
-        import subprocess
-        result = subprocess.run(
-            ['git', 'rev-parse', '--short', 'HEAD'],
-            capture_output=True,
-            text=True,
-            check=False,
-            timeout=2  # Add 2-second timeout to prevent hanging
-        )
-        if result.returncode == 0:
-            return result.stdout.strip()
-    except:
-        pass
+    # DISABLED: Git subprocess hangs on Windows despite timeout parameter
+    # This is non-essential metadata, so we're disabling it to prevent timeouts
     return "unknown"
+    
+    # Original code kept for reference:
+    # try:
+    #     import subprocess
+    #     result = subprocess.run(
+    #         ['git', 'rev-parse', '--short', 'HEAD'],
+    #         capture_output=True,
+    #         text=True,
+    #         check=False,
+    #         timeout=2
+    #     )
+    #     if result.returncode == 0:
+    #         return result.stdout.strip()
+    # except:
+    #     pass
+    # return "unknown"

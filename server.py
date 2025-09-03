@@ -52,13 +52,18 @@ from pydantic import Field, BaseModel
 # from tools.ix_direct_phreeqc_simulation import IXDirectPhreeqcTool  # Replaced by SAC tools
 
 # Configure logging for MCP - CRITICAL for protocol integrity
+# Use a file handler for detailed logs and a stderr handler for warnings/errors only
+file_handler = logging.FileHandler('ix_design_mcp.log')
+file_handler.setLevel(logging.INFO)
+
+stderr_handler = logging.StreamHandler(sys.stderr)
+# Avoid flooding MCP stderr pipe to prevent blocking/hangs
+stderr_handler.setLevel(logging.WARNING)
+
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.FileHandler('ix_design_mcp.log'),
-        logging.StreamHandler(sys.stderr)  # MCP requires stdout to be clean
-    ]
+    handlers=[file_handler, stderr_handler]
 )
 logger = logging.getLogger(__name__)
 
