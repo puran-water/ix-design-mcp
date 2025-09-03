@@ -177,19 +177,8 @@ def compile_unified_results(
 
 def get_git_sha() -> str:
     """Get current git SHA if available."""
-    try:
-        import subprocess
-        result = subprocess.run(
-            ['git', 'rev-parse', '--short', 'HEAD'],
-            capture_output=True,
-            text=True,
-            check=False,
-            timeout=2  # Add 2-second timeout to prevent hanging
-        )
-        if result.returncode == 0:
-            return result.stdout.strip()
-    except:
-        pass
+    # DISABLED: Git subprocess hangs on Windows despite timeout parameter
+    # This is non-essential metadata, so we're disabling it to prevent timeouts
     return "unknown"
 
 
