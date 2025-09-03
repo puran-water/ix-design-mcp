@@ -183,7 +183,8 @@ def get_git_sha() -> str:
             ['git', 'rev-parse', '--short', 'HEAD'],
             capture_output=True,
             text=True,
-            check=False
+            check=False,
+            timeout=2  # Add 2-second timeout to prevent hanging
         )
         if result.returncode == 0:
             return result.stdout.strip()
