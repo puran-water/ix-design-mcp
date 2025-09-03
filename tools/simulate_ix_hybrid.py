@@ -561,10 +561,12 @@ def compile_hybrid_results(
     """
     logger.info("compile_hybrid_results: Entered function")
     # Extract performance metrics from PHREEQC
+    logger.info("Extracting PHREEQC metrics...")
     perf_metrics = phreeqc_results.get("performance_metrics", {})
     regen_results = phreeqc_results.get("regeneration_results", {})
     
     # Build performance metrics
+    logger.info("Building PerformanceMetrics...")
     performance = PerformanceMetrics(
         service_bv_to_target=phreeqc_results.get("breakthrough_bv", 0),
         service_hours=phreeqc_results.get("service_time_hours", 0),
@@ -575,8 +577,10 @@ def compile_hybrid_results(
         sec_kwh_m3=economics.get("sec_kwh_m3", 0.05),
         capacity_utilization_percent=phreeqc_results.get("capacity_utilization_percent", 0)
     )
+    logger.info("PerformanceMetrics created")
     
     # Build ion tracking
+    logger.info("Building IonTracking...")
     ion_tracking = IonTracking(
         feed_mg_l=ix_input.water.get_ion_dict(),
         effluent_mg_l={},  # Extract from PHREEQC if available
@@ -587,8 +591,10 @@ def compile_hybrid_results(
             "hardness": perf_metrics.get("breakthrough_hardness_removal_percent", 0)
         }
     )
+    logger.info("IonTracking created")
     
     # Build mass balance
+    logger.info("Building MassBalance...")
     # Handle None values properly - ensure we always have numeric values
     hardness_eluted = regen_results.get("hardness_eluted_kg_caco3")
     total_hardness = regen_results.get("total_hardness_removed_kg", 0)
@@ -611,8 +617,10 @@ def compile_hybrid_results(
         hardness_removed_kg_caco3=hardness_val,
         closure_percent=99.0
     )
+    logger.info("MassBalance created")
     
     # Build economics result
+    logger.info("Building economics result...")
     unit_costs = UnitCosts(
         vessels_usd=economics.get("unit_costs", {}).get("vessels_usd", 0),
         resin_initial_usd=economics.get("unit_costs", {}).get("resin_initial_usd", 0),
@@ -631,18 +639,25 @@ def compile_hybrid_results(
         sec_kwh_m3=economics.get("sec_kwh_m3", 0),
         unit_costs=unit_costs
     )
+    logger.info("EconomicsResult created")
     
     # Build solver info
+    logger.info("Building SolverInfo...")
     solver_info = SolverInfo(
         engine="phreeqc_watertap_hybrid",
         termination_condition="optimal" if watertap_solved else "phreeqc_only"
     )
+    logger.info("SolverInfo created")
     
     # Build execution context
+    logger.info("Building ExecutionContext...")
     git_sha = "unknown"
     try:
+        logger.info("Calling get_git_sha()...")
         git_sha = get_git_sha()
-    except Exception:
+        logger.info(f"get_git_sha() returned: {git_sha}")
+    except Exception as e:
+        logger.info(f"get_git_sha() failed: {e}")
         pass
     context = ExecutionContext(
         timestamp=datetime.now().isoformat(),
@@ -650,8 +665,10 @@ def compile_hybrid_results(
         watertap_version="0.11.0" if watertap_solved else None,
         git_sha=git_sha
     )
+    logger.info("ExecutionContext created")
     
     # Build engine info
+    logger.info("Building EngineInfo...")
     engine_info = EngineInfo(
         name="phreeqc_watertap_hybrid",
         chemistry="phreeqc_direct",
@@ -660,6 +677,7 @@ def compile_hybrid_results(
         version="1.0.0",
         mode="service_regeneration"
     )
+    logger.info("EngineInfo created")
     
     # Create result object
     logger.info("Creating IXSimulationResult object...")
