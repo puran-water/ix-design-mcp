@@ -630,6 +630,7 @@ async def simulate_sac_ix(simulation_input: str) -> Dict[str, Any]:
             # Set timeout to be less than typical MCP client timeout
             # Client usually times out at ~120s, so we timeout at 100s
             timeout_seconds = int(os.environ.get('MCP_SIMULATION_TIMEOUT_S', '600'))  # 10 minutes
+            logger.info(f"SAC simulation starting with timeout: {timeout_seconds} seconds")
             
             result = await asyncio.wait_for(
                 loop.run_in_executor(None, simulate_sac_phreeqc, sim_input),
@@ -974,13 +975,18 @@ async def simulate_ix_watertap(simulation_input: str) -> Dict[str, Any]:
         if "engine" not in input_data:
             input_data["engine"] = "watertap_hybrid"
         
+        # Control artifact writing via env to test WSL file I/O impact
+        write_artifacts_env = os.environ.get('MCP_WRITE_ARTIFACTS', '1').lower()
+        write_artifacts = write_artifacts_env not in ('0', 'false', 'no')
+
         # Run hybrid simulation in thread pool
         loop = asyncio.get_event_loop()
         timeout_seconds = int(os.environ.get('MCP_SIMULATION_TIMEOUT_S', '600'))  # 10 minutes
+        logger.info(f"Hybrid IX simulation starting with timeout: {timeout_seconds} seconds (engine: {input_data.get('engine', 'watertap_hybrid')})")
         
         try:
             result = await asyncio.wait_for(
-                loop.run_in_executor(HYBRID_EXECUTOR, simulate_ix_hybrid, input_data),
+                loop.run_in_executor(HYBRID_EXECUTOR, simulate_ix_hybrid, input_data, write_artifacts),
                 timeout=timeout_seconds
             )
             return result
@@ -1024,6 +1030,13 @@ def main():
     logger.info("  - simulate_ix_watertap: Hybrid simulation with PHREEQC chemistry + WaterTAP costing")
     if NOTEBOOK_RUNNER_AVAILABLE:
         logger.info("  - run_sac_notebook_analysis: Integrated analysis with Jupyter notebook (optional)")
+    
+    # Log timeout configuration
+    phreeqc_timeout = int(os.environ.get('PHREEQC_RUN_TIMEOUT_S', '600'))
+    mcp_timeout = int(os.environ.get('MCP_SIMULATION_TIMEOUT_S', '600'))
+    logger.info(f"\nTimeout Configuration:")
+    logger.info(f"  - PHREEQC subprocess timeout: {phreeqc_timeout} seconds")
+    logger.info(f"  - MCP simulation timeout: {mcp_timeout} seconds")
     
     # Log key features
     logger.info("\nKey Features:")

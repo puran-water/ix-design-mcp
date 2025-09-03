@@ -11,6 +11,8 @@ import os
 from typing import Dict, Any, Optional, Literal
 from datetime import datetime
 from pathlib import Path
+import time
+import faulthandler
 
 # Import schemas
 from utils.schemas import (
@@ -94,6 +96,27 @@ def simulate_ix_hybrid(
     """
     logger.info("Starting hybrid IX simulation")
     start_time = datetime.now()
+    t0 = time.perf_counter()
+
+    # Lightweight trace to Linux FS to avoid Windows/WSL log contention
+    def _trace(msg: str) -> None:
+        try:
+            ts = datetime.now().strftime('%H:%M:%S.%f')[:-3]
+            with open('/tmp/ix-hybrid-trace.log', 'a', encoding='utf-8') as f:
+                f.write(f"{ts} - {msg}\n")
+        except Exception:
+            pass
+
+    _trace("simulate_ix_hybrid: start")
+
+    # Install a watchdog that dumps thread traces if something blocks for too long
+    # This is diagnostic-only and harmless; it writes stacks to /tmp on WSL/Linux
+    try:
+        fh = open('/tmp/ix-hybrid-stacks.log', 'a', encoding='utf-8')
+        # Dump every 120s until cancelled
+        faulthandler.dump_traceback_later(120, repeat=True, file=fh)
+    except Exception:
+        fh = None
     
     # Parse input if needed
     if isinstance(simulation_input, dict):
@@ -116,12 +139,14 @@ def simulate_ix_hybrid(
     
     # Write input artifact if requested
     if write_artifacts:
+        _trace("writing input artifact: begin")
         input_path = artifacts_mgr.write_json_artifact(
             ix_input.model_dump(),
             run_id,
             "input"
         )
         artifacts.append(input_path)
+        _trace(f"writing input artifact: done -> {input_path}")
     
     try:
         # Step 1: Run PHREEQC simulation for chemistry
@@ -161,7 +186,9 @@ def simulate_ix_hybrid(
             f"[Step 1/4] Running PHREEQC simulation for chemistry (regen_mode="
             f"{requested_regen_mode or 'staged_fixed'})"
         )
+        _trace("phreeqc: begin")
         phreeqc_results = run_phreeqc_engine(ix_input, requested_regen_mode=requested_regen_mode)
+        _trace("phreeqc: done")
         
         if phreeqc_results.get("status") == "error":
             raise RuntimeError(f"PHREEQC failed: {phreeqc_results.get('message')}")
@@ -172,9 +199,11 @@ def simulate_ix_hybrid(
         import_error = None
         
         logger.info(f"WaterTAP mode: {watertap_mode}")
+        _trace(f"watertap_mode: {watertap_mode}")
         
         if watertap_mode == "off":
             logger.info("WaterTAP disabled by configuration - using PHREEQC with estimated costs")
+            _trace("watertap: disabled - proceeding with PHREEQC-only costing")
             watertap_available = False
         elif watertap_mode in ["auto", "on"]:
             # Try to import WaterTAP wrapper
@@ -236,9 +265,15 @@ def simulate_ix_hybrid(
         else:
             # WaterTAP not available: estimate costs and mark not solved
             watertap_solved = False
+            _trace("economics: begin estimate_costs_from_phreeqc")
+            logger.info("Estimating costs from PHREEQC results...")
             economics = estimate_costs_from_phreeqc(phreeqc_results, ix_input)
+            logger.info("Cost estimation complete")
+            _trace("economics: end estimate_costs_from_phreeqc")
         
         # Compile unified results
+        logger.info("Compiling unified results...")
+        _trace("compile: begin")
         unified_results = compile_hybrid_results(
             phreeqc_results,
             economics,
@@ -246,17 +281,25 @@ def simulate_ix_hybrid(
             run_id,
             watertap_solved
         )
+        logger.info("Results compilation complete")
+        _trace("compile: end")
         
         # Write results artifact
         if write_artifacts:
+            logger.info("Writing results artifact...")
+            _trace("write_results_artifact: begin")
             results_path = artifacts_mgr.write_json_artifact(
                 unified_results,
                 run_id,
                 "results"
             )
             artifacts.append(results_path)
+            logger.info(f"Results artifact written: {results_path}")
+            _trace(f"write_results_artifact: end -> {results_path}")
             
             # Create manifest
+            logger.info("Creating manifest...")
+            _trace("manifest: begin")
             manifest_path = artifacts_mgr.create_manifest(
                 run_id,
                 artifacts,
@@ -268,18 +311,32 @@ def simulate_ix_hybrid(
                 }
             )
             artifacts.append(manifest_path)
+            logger.info(f"Manifest created: {manifest_path}")
+            _trace(f"manifest: end -> {manifest_path}")
         
         # Add artifacts to results
         unified_results["artifacts"] = artifacts
         unified_results["artifact_dir"] = str(artifacts_mgr.base_dir)
         
         logger.info(f"Hybrid simulation complete. Run ID: {run_id}")
+        _trace(f"simulate_ix_hybrid: complete in {time.perf_counter() - t0:.2f}s")
+        # Cancel watchdog
+        try:
+            faulthandler.cancel_dump_traceback_later()
+        except Exception:
+            pass
+        if fh:
+            try:
+                fh.close()
+            except Exception:
+                pass
         return unified_results
         
     except Exception as e:
         import traceback
         logger.error(f"Hybrid simulation failed: {str(e)}")
         logger.error(f"Traceback: {traceback.format_exc()}")
+        _trace(f"simulate_ix_hybrid: exception -> {e}")
         
         # Write error artifact
         if write_artifacts:
@@ -290,13 +347,26 @@ def simulate_ix_hybrid(
                 "run_id": run_id,
                 "timestamp": datetime.now().isoformat()
             }
+            _trace("write_error_artifact: begin")
             error_path = artifacts_mgr.write_json_artifact(
                 error_data,
                 run_id,
                 "error"
             )
             artifacts.append(error_path)
+            _trace(f"write_error_artifact: end -> {error_path}")
         
+        # Cancel watchdog on error
+        try:
+            faulthandler.cancel_dump_traceback_later()
+        except Exception:
+            pass
+        if fh:
+            try:
+                fh.close()
+            except Exception:
+                pass
+
         return {
             "status": "error",
             "message": str(e),
@@ -563,11 +633,16 @@ def compile_hybrid_results(
     )
     
     # Build execution context
+    git_sha = "unknown"
+    try:
+        git_sha = get_git_sha()
+    except Exception:
+        pass
     context = ExecutionContext(
         timestamp=datetime.now().isoformat(),
         phreeqpython_version="1.5.0",  # Get dynamically if possible
         watertap_version="0.11.0" if watertap_solved else None,
-        git_sha=get_git_sha()
+        git_sha=git_sha
     )
     
     # Build engine info
@@ -581,6 +656,13 @@ def compile_hybrid_results(
     )
     
     # Create result object
+    logger.info("Creating IXSimulationResult object...")
+    
+    # Log breakthrough data size for debugging
+    bd = phreeqc_results.get("breakthrough_data")
+    if bd and isinstance(bd, list):
+        logger.info(f"Breakthrough data has {len(bd)} points")
+    
     result = IXSimulationResult(
         status="success" if phreeqc_results.get("status") == "success" else "warning",
         run_id=run_id,
@@ -601,7 +683,11 @@ def compile_hybrid_results(
         }
     )
     
-    return result.model_dump()
+    logger.info("IXSimulationResult object created, calling model_dump()...")
+    result_dict = result.model_dump()
+    logger.info("model_dump() complete")
+    
+    return result_dict
 
 
 def get_git_sha() -> str:
