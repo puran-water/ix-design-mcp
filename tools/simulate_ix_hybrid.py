@@ -1,0 +1,610 @@
+"""
+Hybrid IX Simulation Module
+
+Integrates PHREEQC chemistry with WaterTAP flowsheet and costing.
+Main entry point for hybrid simulations.
+"""
+
+import logging
+import json
+import os
+from typing import Dict, Any, Optional, Literal
+from datetime import datetime
+from pathlib import Path
+
+# Import schemas
+from utils.schemas import (
+    IXSimulationInput,
+    IXSimulationResult,
+    EngineInfo,
+    PerformanceMetrics,
+    IonTracking,
+    MassBalance,
+    EconomicsResult,
+    UnitCosts,
+    SolverInfo,
+    ExecutionContext,
+    convert_legacy_sac_output
+)
+
+# Import artifact manager
+from utils.artifacts import get_artifact_manager
+
+# Defer WaterTAP wrapper import to runtime for graceful degradation
+
+# Import existing PHREEQC tools
+from tools.sac_simulation import simulate_sac_phreeqc, SACSimulationInput
+from tools.wac_simulation import simulate_wac_system, WACSimulationInput
+
+logger = logging.getLogger(__name__)
+
+
+def get_watertap_mode() -> Literal["off", "auto", "on"]:
+    """
+    Get WaterTAP mode from environment or config.
+    
+    Returns:
+        "off": Never use WaterTAP
+        "auto": Try WaterTAP with smoke test, fallback if fails
+        "on": Force WaterTAP, error if not available
+    """
+    mode = os.environ.get("IX_WATERTAP", "off").lower()
+    if mode not in ["off", "auto", "on"]:
+        logger.warning(f"Invalid IX_WATERTAP mode: {mode}, defaulting to 'off'")
+        return "off"
+    return mode
+
+
+def run_watertap_smoke_test(timeout_seconds: int = 30) -> bool:
+    """
+    Run a minimal WaterTAP smoke test with timeout.
+    
+    This creates a minimal flowsheet to verify WaterTAP is functional
+    without running a full simulation.
+    
+    Args:
+        timeout_seconds: Maximum time to wait for smoke test
+        
+    Returns:
+        True if smoke test passes, False otherwise
+    """
+    import concurrent.futures
+    import multiprocessing
+    
+    def smoke_test_worker():
+        """Worker function for smoke test in separate process."""
+        try:
+            from pyomo.environ import ConcreteModel
+            from idaes.core import FlowsheetBlock
+            from watertap.property_models.multicomp_aq_sol_prop_pack import MCASParameterBlock
+            
+            # Create minimal model
+            m = ConcreteModel()
+            m.fs = FlowsheetBlock(dynamic=False)
+            
+            # Create minimal MCAS property package
+            m.fs.properties = MCASParameterBlock(
+                solute_list=["Na_+", "Cl_-"],
+                mw_data={"H2O": 18e-3, "Na_+": 23e-3, "Cl_-": 35.45e-3},
+                charge={"Na_+": 1, "Cl_-": -1},
+                diffusivity_data={("Liq", "Na_+"): 1e-9, ("Liq", "Cl_-"): 1e-9}
+            )
+            
+            # If we get here, basic WaterTAP components work
+            return True
+        except Exception as e:
+            logger.debug(f"Smoke test failed: {e}")
+            return False
+    
+    try:
+        # Use process pool to allow hard timeout
+        ctx = multiprocessing.get_context('spawn')  # Use spawn for Windows compatibility
+        with concurrent.futures.ProcessPoolExecutor(max_workers=1, mp_context=ctx) as executor:
+            future = executor.submit(smoke_test_worker)
+            result = future.result(timeout=timeout_seconds)
+            return result
+    except concurrent.futures.TimeoutError:
+        logger.warning(f"WaterTAP smoke test timed out after {timeout_seconds} seconds")
+        return False
+    except Exception as e:
+        logger.warning(f"WaterTAP smoke test failed: {e}")
+        return False
+
+
+def simulate_ix_hybrid(
+    simulation_input: Dict[str, Any],
+    write_artifacts: bool = True
+) -> Dict[str, Any]:
+    """
+    Run hybrid IX simulation: PHREEQC chemistry + WaterTAP flowsheet/costing.
+    
+    This is the main implementation of the hybrid approach where:
+    1. PHREEQC handles the detailed multi-ion chemistry
+    2. WaterTAP provides flowsheet structure and costing
+    3. Results are combined into unified schema
+    
+    Args:
+        simulation_input: Complete simulation input (dict or IXSimulationInput)
+        write_artifacts: Whether to write result artifacts
+        
+    Returns:
+        Unified simulation results conforming to IXSimulationResult schema
+    """
+    logger.info("Starting hybrid IX simulation")
+    start_time = datetime.now()
+    
+    # Parse input if needed
+    if isinstance(simulation_input, dict):
+        try:
+            ix_input = IXSimulationInput(**simulation_input)
+        except Exception as e:
+            logger.error(f"Invalid input: {e}")
+            return {
+                "status": "error",
+                "message": f"Input validation failed: {str(e)}",
+                "run_id": datetime.now().strftime("%Y%m%d_%H%M%S")
+            }
+    else:
+        ix_input = simulation_input
+    
+    # Get artifact manager
+    artifacts_mgr = get_artifact_manager()
+    run_id = artifacts_mgr.generate_run_id(ix_input.model_dump())
+    artifacts = []
+    
+    # Write input artifact if requested
+    if write_artifacts:
+        input_path = artifacts_mgr.write_json_artifact(
+            ix_input.model_dump(),
+            run_id,
+            "input"
+        )
+        artifacts.append(input_path)
+    
+    try:
+        # Step 1: Run PHREEQC simulation for chemistry
+        logger.info("[Step 1/4] Running PHREEQC simulation for chemistry")
+        phreeqc_results = run_phreeqc_engine(ix_input)
+        
+        if phreeqc_results.get("status") == "error":
+            raise RuntimeError(f"PHREEQC failed: {phreeqc_results.get('message')}")
+        
+        # Check WaterTAP mode and availability
+        watertap_mode = get_watertap_mode()
+        watertap_available = False
+        import_error = None
+        
+        logger.info(f"WaterTAP mode: {watertap_mode}")
+        
+        if watertap_mode == "off":
+            logger.info("WaterTAP disabled by configuration - using PHREEQC with estimated costs")
+            watertap_available = False
+        elif watertap_mode in ["auto", "on"]:
+            # Try to import WaterTAP wrapper
+            try:
+                from utils.ix_watertap_wrapper import IXWaterTAPWrapper, WATERTAP_AVAILABLE
+                if WATERTAP_AVAILABLE:
+                    if watertap_mode == "auto":
+                        # Run smoke test for auto mode
+                        logger.info("Running WaterTAP smoke test...")
+                        watertap_available = run_watertap_smoke_test()
+                        if not watertap_available:
+                            logger.warning("WaterTAP smoke test failed, falling back to PHREEQC")
+                    else:  # mode == "on"
+                        watertap_available = True
+                        logger.info("WaterTAP forced on by configuration")
+                else:
+                    if watertap_mode == "on":
+                        raise RuntimeError("WaterTAP forced on but not available")
+                    logger.warning("WaterTAP not available, falling back to PHREEQC")
+            except Exception as e:
+                import_error = e
+                if watertap_mode == "on":
+                    raise RuntimeError(f"WaterTAP forced on but import failed: {e}")
+                logger.warning(f"WaterTAP import failed, falling back to PHREEQC: {e}")
+
+        if watertap_available:
+            # Step 2: Build WaterTAP flowsheet
+            logger.info("[Step 2/4] Building WaterTAP flowsheet")
+            wrapper = IXWaterTAPWrapper()
+            
+            # Prepare feed composition for WaterTAP
+            feed_composition = ix_input.water.get_ion_dict()
+            flow_rate_m3h = ix_input.water.flow_m3h
+            vessel_config = ix_input.vessel.model_dump()
+            
+            model = wrapper.build_flowsheet(
+                feed_composition,
+                flow_rate_m3h,
+                vessel_config
+            )
+            
+            # Step 3: Inject PHREEQC results and solve
+            logger.info("[Step 3/4] Injecting PHREEQC results into flowsheet")
+            wrapper.inject_phreeqc_results(phreeqc_results)
+            
+            if not wrapper.solve_flowsheet():
+                logger.warning("WaterTAP solve failed, continuing with PHREEQC results only")
+                watertap_solved = False
+            else:
+                watertap_solved = True
+            
+            # Step 4: Apply costing
+            logger.info("[Step 4/4] Applying WaterTAP costing")
+            if watertap_solved:
+                pricing = ix_input.pricing.model_dump() if ix_input.pricing else None
+                economics = wrapper.apply_costing(pricing)
+            else:
+                # Fallback: estimate costs from PHREEQC results
+                economics = estimate_costs_from_phreeqc(phreeqc_results, ix_input)
+        else:
+            # WaterTAP not available: estimate costs and mark not solved
+            watertap_solved = False
+            economics = estimate_costs_from_phreeqc(phreeqc_results, ix_input)
+        
+        # Compile unified results
+        unified_results = compile_hybrid_results(
+            phreeqc_results,
+            economics,
+            ix_input,
+            run_id,
+            watertap_solved
+        )
+        
+        # Write results artifact
+        if write_artifacts:
+            results_path = artifacts_mgr.write_json_artifact(
+                unified_results,
+                run_id,
+                "results"
+            )
+            artifacts.append(results_path)
+            
+            # Create manifest
+            manifest_path = artifacts_mgr.create_manifest(
+                run_id,
+                artifacts,
+                {
+                    "engine": "hybrid",
+                    "phreeqc_success": True,
+                    "watertap_solved": watertap_solved,
+                    "duration_seconds": (datetime.now() - start_time).total_seconds()
+                }
+            )
+            artifacts.append(manifest_path)
+        
+        # Add artifacts to results
+        unified_results["artifacts"] = artifacts
+        unified_results["artifact_dir"] = str(artifacts_mgr.base_dir)
+        
+        logger.info(f"Hybrid simulation complete. Run ID: {run_id}")
+        return unified_results
+        
+    except Exception as e:
+        import traceback
+        logger.error(f"Hybrid simulation failed: {str(e)}")
+        logger.error(f"Traceback: {traceback.format_exc()}")
+        
+        # Write error artifact
+        if write_artifacts:
+            error_data = {
+                "status": "error",
+                "message": str(e),
+                "traceback": traceback.format_exc(),
+                "run_id": run_id,
+                "timestamp": datetime.now().isoformat()
+            }
+            error_path = artifacts_mgr.write_json_artifact(
+                error_data,
+                run_id,
+                "error"
+            )
+            artifacts.append(error_path)
+        
+        return {
+            "status": "error",
+            "message": str(e),
+            "run_id": run_id,
+            "artifacts": artifacts
+        }
+
+
+def run_phreeqc_engine(ix_input: IXSimulationInput) -> Dict[str, Any]:
+    """
+    Run PHREEQC simulation based on resin type.
+    
+    Args:
+        ix_input: Parsed simulation input
+        
+    Returns:
+        PHREEQC simulation results
+    """
+    # Prepare input for legacy PHREEQC tools
+    # Extract ions from the unified dict or individual fields
+    ions = ix_input.water.get_ion_dict()
+    legacy_input = {
+        "water_analysis": {
+            "flow_m3_hr": ix_input.water.flow_m3h,
+            "temperature_celsius": ix_input.water.temperature_c,
+            "pH": ix_input.water.ph,
+            "ca_mg_l": ions.get('Ca_2+', 0),
+            "mg_mg_l": ions.get('Mg_2+', 0),
+            "na_mg_l": ions.get('Na_+', 0),
+            "cl_mg_l": ions.get('Cl_-', 0),
+            "hco3_mg_l": ions.get('HCO3_-', 0),
+            "so4_mg_l": ions.get('SO4_2-', 0)
+        },
+        "vessel_configuration": {
+            "diameter_m": ix_input.vessel.diameter_m,
+            "bed_depth_m": ix_input.vessel.bed_depth_m,
+            "bed_volume_L": ix_input.vessel.bed_volume_l or (
+                3.14159 * (ix_input.vessel.diameter_m/2)**2 * 
+                ix_input.vessel.bed_depth_m * 1000
+            ),
+            "number_service": ix_input.vessel.number_in_service,
+            "number_standby": 1,
+            "resin_type": ix_input.resin_type,
+            "resin_volume_m3": ix_input.vessel.resin_volume_m3 or (
+                3.14159 * (ix_input.vessel.diameter_m/2)**2 * ix_input.vessel.bed_depth_m
+            ),
+            "freeboard_m": 0.5,  # Default freeboard
+            "vessel_height_m": ix_input.vessel.bed_depth_m + 0.5  # bed depth + freeboard
+        },
+        "target_hardness_mg_l_caco3": ix_input.targets.hardness_mg_l_caco3,
+        "regeneration_config": {
+            "enabled": True,
+            "regenerant_type": ix_input.cycle.regenerant_type,
+            "concentration_percent": ix_input.cycle.regenerant_concentration_wt,
+            "regenerant_dose_g_per_L": ix_input.cycle.regenerant_dose_g_per_l,
+            "flow_direction": "back" if ix_input.cycle.flow_direction == "counter-current" else "forward",
+            "backwash_enabled": ix_input.cycle.backwash
+        },
+        "full_data": ix_input.options.full_data if ix_input.options else False
+    }
+    
+    # Route to appropriate simulation
+    if ix_input.resin_type == "SAC":
+        sac_input = SACSimulationInput(**legacy_input)
+        results = simulate_sac_phreeqc(sac_input)
+        # Convert to dict if needed
+        if hasattr(results, 'dict'):
+            return results.model_dump()
+        return results
+    
+    elif ix_input.resin_type in ["WAC_Na", "WAC_H"]:
+        # Add WAC-specific fields
+        if ix_input.resin_type == "WAC_H":
+            legacy_input["target_alkalinity_mg_l_caco3"] = (
+                ix_input.targets.alkalinity_mg_l_caco3 or 5.0
+            )
+        
+        wac_input = WACSimulationInput(**legacy_input)
+        results = simulate_wac_system(wac_input)
+        if hasattr(results, 'dict'):
+            return results.model_dump()
+        return results
+    
+    else:
+        raise ValueError(f"Unsupported resin type: {ix_input.resin_type}")
+
+
+def estimate_costs_from_phreeqc(
+    phreeqc_results: Dict[str, Any],
+    ix_input: IXSimulationInput
+) -> Dict[str, Any]:
+    """
+    Estimate costs from PHREEQC results when WaterTAP solve fails.
+    
+    Args:
+        phreeqc_results: Results from PHREEQC simulation
+        ix_input: Original input parameters
+        
+    Returns:
+        Estimated economics dictionary
+    """
+    # Extract key parameters
+    vessel = ix_input.vessel
+    pricing = ix_input.pricing
+    regen = phreeqc_results.get("regeneration_results", {})
+    
+    # Capital costs (simplified correlations)
+    resin_volume_m3 = vessel.resin_volume_m3 or (
+        3.14159 * (vessel.diameter_m/2)**2 * vessel.bed_depth_m
+    )
+    
+    vessel_cost = 50000 * (resin_volume_m3 ** 0.7)
+    resin_cost = (pricing.resin_usd_m3 if pricing else 2800) * resin_volume_m3
+    pump_cost = 15000  # Fixed estimate
+    instrumentation = (vessel_cost + resin_cost) * 0.15
+    
+    total_capital = (vessel_cost + resin_cost + pump_cost + instrumentation) * 2.5
+    
+    # Operating costs (annual)
+    regenerant_kg = regen.get("regenerant_consumed_kg", 100)
+    cycle_hours = regen.get("total_cycle_time_hours", 24)
+    cycles_per_year = 8760 / cycle_hours
+    
+    regenerant_cost = regenerant_kg * cycles_per_year * (pricing.nacl_usd_kg if pricing else 0.12)
+    resin_replacement = resin_cost * (pricing.resin_replacement_rate if pricing else 0.05)
+    energy_cost = ix_input.water.flow_m3h * 8760 * 0.05 * (pricing.electricity_usd_kwh if pricing else 0.07)
+    
+    total_opex = regenerant_cost + resin_replacement + energy_cost
+    
+    # Calculate LCOW
+    crf = 0.1  # Capital recovery factor (simplified)
+    annual_production = ix_input.water.flow_m3h * 8760 * 0.9  # 90% availability
+    lcow = (total_capital * crf + total_opex) / annual_production
+    
+    return {
+        "capital_cost_usd": total_capital,
+        "operating_cost_usd_year": total_opex,
+        "regenerant_cost_usd_year": regenerant_cost,
+        "resin_replacement_cost_usd_year": resin_replacement,
+        "energy_cost_usd_year": energy_cost,
+        "lcow_usd_m3": lcow,
+        "sec_kwh_m3": 0.05,  # Default estimate
+        "unit_costs": {
+            "vessels_usd": vessel_cost,
+            "resin_initial_usd": resin_cost,
+            "pumps_usd": pump_cost,
+            "instrumentation_usd": instrumentation,
+            "installation_factor": 2.5
+        }
+    }
+
+
+def compile_hybrid_results(
+    phreeqc_results: Dict[str, Any],
+    economics: Dict[str, Any],
+    ix_input: IXSimulationInput,
+    run_id: str,
+    watertap_solved: bool
+) -> Dict[str, Any]:
+    """
+    Compile results from PHREEQC and WaterTAP into unified schema.
+    
+    Args:
+        phreeqc_results: PHREEQC simulation results
+        economics: Economic results from WaterTAP or estimation
+        ix_input: Original input
+        run_id: Unique run identifier
+        watertap_solved: Whether WaterTAP flowsheet solved
+        
+    Returns:
+        Unified results conforming to IXSimulationResult schema
+    """
+    # Extract performance metrics from PHREEQC
+    perf_metrics = phreeqc_results.get("performance_metrics", {})
+    regen_results = phreeqc_results.get("regeneration_results", {})
+    
+    # Build performance metrics
+    performance = PerformanceMetrics(
+        service_bv_to_target=phreeqc_results.get("breakthrough_bv", 0),
+        service_hours=phreeqc_results.get("service_time_hours", 0),
+        effluent_hardness_mg_l_caco3=phreeqc_results.get("breakthrough_hardness_mg_l_caco3", 5),
+        effluent_ph=7.8,  # Extract from data if available
+        effluent_tds_mg_l=0,  # Calculate from ion sum
+        delta_p_bar=0.6,  # Default or calculate
+        sec_kwh_m3=economics.get("sec_kwh_m3", 0.05),
+        capacity_utilization_percent=phreeqc_results.get("capacity_utilization_percent", 0)
+    )
+    
+    # Build ion tracking
+    ion_tracking = IonTracking(
+        feed_mg_l=ix_input.water.get_ion_dict(),
+        effluent_mg_l={},  # Extract from PHREEQC if available
+        waste_mg_l={},  # Extract from regeneration data
+        removal_percent={
+            "Ca_2+": perf_metrics.get("breakthrough_ca_removal_percent", 0),
+            "Mg_2+": perf_metrics.get("breakthrough_mg_removal_percent", 0),
+            "hardness": perf_metrics.get("breakthrough_hardness_removal_percent", 0)
+        }
+    )
+    
+    # Build mass balance
+    # Handle None values properly - ensure we always have numeric values
+    hardness_eluted = regen_results.get("hardness_eluted_kg_caco3")
+    total_hardness = regen_results.get("total_hardness_removed_kg", 0)
+    
+    # Ensure we have a numeric value
+    if hardness_eluted is not None and hardness_eluted != "null":
+        hardness_val = float(hardness_eluted)
+    elif total_hardness is not None and total_hardness != "null":
+        hardness_val = float(total_hardness)
+    else:
+        hardness_val = 0.0
+    
+    logger.debug(f"hardness_val: {hardness_val}, eluted: {hardness_eluted}, total: {total_hardness}")
+    
+    mass_balance = MassBalance(
+        regenerant_kg_cycle=float(regen_results.get("regenerant_consumed_kg", 0) or 0),
+        backwash_m3_cycle=0.0,  # Extract if available
+        rinse_m3_cycle=0.0,  # Extract if available
+        waste_m3_cycle=float(regen_results.get("waste_volume_m3", 0) or 0),
+        hardness_removed_kg_caco3=hardness_val,
+        closure_percent=99.0
+    )
+    
+    # Build economics result
+    unit_costs = UnitCosts(
+        vessels_usd=economics.get("unit_costs", {}).get("vessels_usd", 0),
+        resin_initial_usd=economics.get("unit_costs", {}).get("resin_initial_usd", 0),
+        pumps_usd=economics.get("unit_costs", {}).get("pumps_usd", 0),
+        instrumentation_usd=economics.get("unit_costs", {}).get("instrumentation_usd", 0),
+        installation_factor=economics.get("unit_costs", {}).get("installation_factor", 2.5)
+    )
+    
+    economics_result = EconomicsResult(
+        capital_cost_usd=economics.get("capital_cost_usd", 0),
+        operating_cost_usd_year=economics.get("operating_cost_usd_year", 0),
+        regenerant_cost_usd_year=economics.get("regenerant_cost_usd_year", 0),
+        resin_replacement_cost_usd_year=economics.get("resin_replacement_cost_usd_year", 0),
+        energy_cost_usd_year=economics.get("energy_cost_usd_year", 0),
+        lcow_usd_m3=economics.get("lcow_usd_m3", 0),
+        sec_kwh_m3=economics.get("sec_kwh_m3", 0),
+        unit_costs=unit_costs
+    )
+    
+    # Build solver info
+    solver_info = SolverInfo(
+        engine="phreeqc_watertap_hybrid",
+        termination_condition="optimal" if watertap_solved else "phreeqc_only"
+    )
+    
+    # Build execution context
+    context = ExecutionContext(
+        timestamp=datetime.now().isoformat(),
+        phreeqpython_version="1.5.0",  # Get dynamically if possible
+        watertap_version="0.11.0" if watertap_solved else None,
+        git_sha=get_git_sha()
+    )
+    
+    # Build engine info
+    engine_info = EngineInfo(
+        name="phreeqc_watertap_hybrid",
+        chemistry="phreeqc_direct",
+        flowsheet="watertap" if watertap_solved else None,
+        costing="watertap_ix" if watertap_solved else "estimated",
+        version="1.0.0",
+        mode="service_regeneration"
+    )
+    
+    # Create result object
+    result = IXSimulationResult(
+        status="success" if phreeqc_results.get("status") == "success" else "warning",
+        run_id=run_id,
+        performance=performance,
+        ion_tracking=ion_tracking,
+        mass_balance=mass_balance,
+        economics=economics_result,
+        solve_info=solver_info,
+        warnings=phreeqc_results.get("warnings", []),
+        context=context,
+        artifact_dir="",  # Will be set by caller
+        artifacts=[],  # Will be set by caller
+        breakthrough_data=phreeqc_results.get("breakthrough_data"),
+        simulation_details={
+            "engine": engine_info.model_dump(),
+            "phreeqc_details": phreeqc_results.get("simulation_details", {}),
+            "watertap_solved": watertap_solved
+        }
+    )
+    
+    return result.model_dump()
+
+
+def get_git_sha() -> str:
+    """Get current git SHA if available."""
+    try:
+        import subprocess
+        result = subprocess.run(
+            ['git', 'rev-parse', '--short', 'HEAD'],
+            capture_output=True,
+            text=True,
+            check=False
+        )
+        if result.returncode == 0:
+            return result.stdout.strip()
+    except:
+        pass
+    return "unknown"

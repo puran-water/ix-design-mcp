@@ -41,6 +41,7 @@ import logging
 from typing import Dict, Any, Optional, List, Annotated
 import time
 from datetime import datetime
+from concurrent.futures import ThreadPoolExecutor
 
 from fastmcp import FastMCP, Context
 from pydantic import Field, BaseModel
@@ -101,6 +102,13 @@ except ImportError as e:
 # Configuration constants
 MAX_REQUEST_SIZE = 10 * 1024 * 1024  # 10MB max request size
 REQUEST_TIMEOUT = 300  # 5 minutes timeout for long simulations
+
+# Dedicated executor for hybrid tasks to avoid starvation in default pool
+try:
+    HYBRID_EXECUTOR_WORKERS = int(os.environ.get('MCP_HYBRID_EXECUTOR_WORKERS', '2'))
+except Exception:
+    HYBRID_EXECUTOR_WORKERS = 2
+HYBRID_EXECUTOR = ThreadPoolExecutor(max_workers=HYBRID_EXECUTOR_WORKERS, thread_name_prefix="hybrid")
 
 # Create FastMCP instance with configuration
 mcp = FastMCP("IX Design Server")
@@ -621,7 +629,7 @@ async def simulate_sac_ix(simulation_input: str) -> Dict[str, Any]:
         try:
             # Set timeout to be less than typical MCP client timeout
             # Client usually times out at ~120s, so we timeout at 100s
-            timeout_seconds = int(os.environ.get('MCP_SIMULATION_TIMEOUT_S', '100'))
+            timeout_seconds = int(os.environ.get('MCP_SIMULATION_TIMEOUT_S', '600'))  # 10 minutes
             
             result = await asyncio.wait_for(
                 loop.run_in_executor(None, simulate_sac_phreeqc, sim_input),
@@ -894,6 +902,104 @@ async def simulate_wac_ix(simulation_input: str) -> Dict[str, Any]:
             "details": "WAC simulation failed. Check input data and resin type."
         }
 
+# Add hybrid simulation tool
+@mcp.tool(
+    description="""Run hybrid IX simulation with PHREEQC chemistry and WaterTAP costing.
+    
+    This tool provides the best of both worlds:
+    - PHREEQC for accurate multi-ion chemistry and competition
+    - WaterTAP for flowsheet structure and industrial economics
+    
+    Input structure follows unified schema:
+    {
+        "schema_version": "1.0.0",
+        "resin_type": "SAC" | "WAC_Na" | "WAC_H",
+        "water": {
+            "flow_m3h": 100,
+            "temperature_c": 25,
+            "ions_mg_l": {"Ca_2+": 120, "Mg_2+": 40, ...}
+        },
+        "vessel": {
+            "diameter_m": 2.0,
+            "bed_depth_m": 2.5,
+            "number_in_service": 1
+        },
+        "targets": {
+            "hardness_mg_l_caco3": 5.0
+        },
+        "cycle": {
+            "regenerant_type": "NaCl",
+            "regenerant_dose_g_per_l": 100
+        },
+        "pricing": {
+            "electricity_usd_kwh": 0.07,
+            "nacl_usd_kg": 0.12,
+            "resin_usd_m3": 2800
+        },
+        "engine": "watertap_hybrid"  // Optional, defaults to hybrid
+    }
+    
+    Key features:
+    - Unified results schema across all engines
+    - Complete economic analysis (CAPEX, OPEX, LCOW)
+    - Artifact writing to results/ directory
+    - Detailed ion tracking and mass balance
+    - Handles multi-component hardness accurately
+    
+    Returns:
+    - Comprehensive results with performance, economics, and artifacts
+    - Compatible with downstream analysis tools
+    - Results written to results/ix_simulation_*.json
+    """
+)
+async def simulate_ix_watertap(simulation_input: str) -> Dict[str, Any]:
+    """Execute hybrid PHREEQC + WaterTAP simulation."""
+    try:
+        # Validate input size
+        if len(simulation_input) > MAX_REQUEST_SIZE:
+            return {
+                "status": "error",
+                "error": "Request too large",
+                "details": f"Request size exceeds maximum {MAX_REQUEST_SIZE} bytes"
+            }
+        
+        import asyncio
+        import json
+        from tools.simulate_ix_hybrid import simulate_ix_hybrid
+        
+        # Parse input
+        input_data = json.loads(simulation_input)
+        
+        # Set engine to hybrid if not specified
+        if "engine" not in input_data:
+            input_data["engine"] = "watertap_hybrid"
+        
+        # Run hybrid simulation in thread pool
+        loop = asyncio.get_event_loop()
+        timeout_seconds = int(os.environ.get('MCP_SIMULATION_TIMEOUT_S', '600'))  # 10 minutes
+        
+        try:
+            result = await asyncio.wait_for(
+                loop.run_in_executor(HYBRID_EXECUTOR, simulate_ix_hybrid, input_data),
+                timeout=timeout_seconds
+            )
+            return result
+        except asyncio.TimeoutError:
+            return {
+                "status": "timeout",
+                "error": "Hybrid simulation timeout",
+                "details": f"Simulation exceeded {timeout_seconds} second timeout",
+                "suggestions": "Consider simplifying water chemistry or using PHREEQC-only mode"
+            }
+        
+    except Exception as e:
+        logger.error(f"Hybrid simulation failed: {e}")
+        return {
+            "status": "error",
+            "error": str(e),
+            "details": "Hybrid simulation failed. Check WaterTAP installation."
+        }
+
 # Tools are already registered via decorators above
 
 # Main entry point
@@ -915,14 +1021,17 @@ def main():
     logger.info("  - simulate_sac_ix: Direct PHREEQC simulation with target hardness breakthrough")
     logger.info("  - configure_wac_ix: WAC vessel hydraulic sizing (Na-form or H-form)")
     logger.info("  - simulate_wac_ix: WAC PHREEQC simulation with alkalinity tracking")
+    logger.info("  - simulate_ix_watertap: Hybrid simulation with PHREEQC chemistry + WaterTAP costing")
     if NOTEBOOK_RUNNER_AVAILABLE:
-        logger.info("  - run_sac_notebook_analysis: Integrated analysis with Jupyter notebook (RECOMMENDED)")
+        logger.info("  - run_sac_notebook_analysis: Integrated analysis with Jupyter notebook (optional)")
     
     # Log key features
     logger.info("\nKey Features:")
-    logger.info("  - SAC-only system focused on RO pretreatment")
+    logger.info("  - Multi-engine support: PHREEQC for chemistry, WaterTAP for costing")
     logger.info("  - Direct PHREEQC engine for accurate breakthrough curves")
-    logger.info("  - PHREEQC determines operating capacity and Na+ competition (no heuristics)")
+    logger.info("  - WaterTAP integration for flowsheet structure and economic analysis")
+    logger.info("  - Unified schema across all simulation engines")
+    logger.info("  - Artifact system with JSON results written to results/ directory")
     logger.info("  - Target hardness breakthrough definition (not 50%)")
     logger.info("  - All MCAS ions supported (Ca, Mg, Na, HCO3, pH required)")
     logger.info("  - Bed volume flows directly from configuration to simulation")

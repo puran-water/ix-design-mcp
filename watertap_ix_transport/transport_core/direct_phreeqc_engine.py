@@ -613,7 +613,7 @@ class DirectPhreeqcEngine:
 
 # Singleton pattern for PHREEQC engine
 @functools.lru_cache(maxsize=1)
-def get_phreeqc_engine(keep_temp_files: bool = False, default_timeout_s: int = 90) -> DirectPhreeqcEngine:
+def get_phreeqc_engine(keep_temp_files: bool = False, default_timeout_s: int = 600) -> DirectPhreeqcEngine:
     """
     Get singleton PHREEQC engine instance.
     

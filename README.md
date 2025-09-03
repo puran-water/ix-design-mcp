@@ -105,4 +105,12 @@ Notes
 - Request limit ~10 MB. Simulation timeout uses `MCP_SIMULATION_TIMEOUT_S`.
 - Set `PHREEQC_EXE` if PHREEQC is not on PATH.
 
+### Important: MCP Client Timeout Configuration
+For long-running simulations (>5 minutes), configure MCP client timeouts before starting Claude Code:
+```bash
+export MCP_TOOL_TIMEOUT=900  # 15 minutes for tool calls
+claude
+```
+See MCP_TIMEOUT_CONFIG.md for detailed configuration instructions.
+
 See API_REFERENCE.md for complete field definitions.
