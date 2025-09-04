@@ -286,6 +286,8 @@ class SACSimulation:
         # Create legacy simulation instance for method access
         # This is temporary - methods will be migrated directly to this class
         self._legacy_sim = _IXDirectPhreeqcSimulation()
+        # Set engine attribute to match legacy's engine
+        self.engine = self._legacy_sim.engine
     
     def run_simulation(self, input_data):
         """Required abstract method from BaseIXSimulation.
@@ -493,6 +495,7 @@ class _IXDirectPhreeqcSimulation:
         if enable_enhancements:
             # Use helper to generate enhanced exchange species
             if 'helper' not in locals():
+                from .base_ix_simulation import BaseIXSimulation
                 class TempIXHelper(BaseIXSimulation):
                     def run_simulation(self, input_data):
                         pass
