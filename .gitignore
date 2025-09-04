@@ -175,7 +175,7 @@ tools/ix_simulation_watertap.py
 # watertap_ix_transport/ directory is now tracked - only ignore pycache
 watertap_ix_transport/__pycache__/
 watertap_ix_transport/**/__pycache__/
-utils/
+utils/__pycache__/
 config/
 # databases/ directory is required - only ignore database files
 databases/*.db
