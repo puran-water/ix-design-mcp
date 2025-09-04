@@ -35,10 +35,11 @@ The server employs a hybrid architecture combining PHREEQC's geochemical accurac
 - `configure_sac_ix` - Size SAC vessels for hardness removal with N+1 redundancy
 - `configure_wac_ix` - Size WAC vessels (Na-form or H-form) for alkalinity control
 
-#### Simulation Tools
-- `simulate_sac_ix` - Run complete SAC cycle (service + regeneration) via PHREEQC
-- `simulate_wac_ix` - Run WAC cycle with pH-dependent capacity modeling
-- `simulate_ix_watertap` - Hybrid simulation with PHREEQC chemistry and WaterTAP costing
+#### Simulation Tool
+- `simulate_ix_watertap` - Unified simulation with PHREEQC chemistry and WaterTAP costing
+  - Handles SAC, WAC Na-form, and WAC H-form resins
+  - Provides complete economic analysis (CAPEX, OPEX, LCOW)
+  - Generates detailed breakthrough curves and performance metrics
 
 ### Technical Specifications
 
