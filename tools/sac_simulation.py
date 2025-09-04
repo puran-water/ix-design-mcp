@@ -1338,8 +1338,8 @@ END
         n_stages = regen_config.regeneration_stages
         cells = CONFIG.DEFAULT_CELLS
         
-        # Get merged database path once
-        db_path = str(CONFIG.get_merged_database_path())
+        # Get PHREEQC database path
+        db_path = str(CONFIG.get_phreeqc_database())
         
         # Use override_bv for optimization iterations
         regenerant_bv = override_bv if override_bv is not None else regen_config.regenerant_bv
