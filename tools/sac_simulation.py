@@ -50,7 +50,7 @@ from .sac_configuration import (
 
 # Import centralized configuration
 from .core_config import CONFIG
-from .base_ix_simulation import BaseIXSimulation
+# Base class removed during cleanup - functionality integrated directly
 
 logger = logging.getLogger(__name__)
 
@@ -275,12 +275,12 @@ class SACSimulationOutput(BaseModel):
     total_cycle_time_hours: float  # No longer optional
 
 
-class SACSimulation(BaseIXSimulation):
-    """SAC ion exchange simulation using unified BaseIXSimulation engine."""
+class SACSimulation:
+    """SAC ion exchange simulation using Direct PHREEQC engine."""
     
     def __init__(self):
-        """Initialize SAC simulation with shared engine from BaseIXSimulation."""
-        super().__init__()  # Use shared engine initialization
+        """Initialize SAC simulation."""
+        # Direct initialization without base class
         logger.info("Initialized SACSimulation with unified PHREEQC engine")
         
         # Create legacy simulation instance for method access
