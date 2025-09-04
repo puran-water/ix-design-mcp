@@ -258,28 +258,24 @@ def simulate_ix_hybrid(
             _trace("watertap: disabled - proceeding with PHREEQC-only costing")
             watertap_available = False
         elif watertap_mode in ["auto", "on"]:
-            # Try to import WaterTAP wrapper
+            # Keep all WaterTAP/IDAES imports in isolated worker processes.
+            # Avoid importing utils.ix_watertap_wrapper here to prevent main-process hangs.
             try:
-                from utils.ix_watertap_wrapper import IXWaterTAPWrapper, WATERTAP_AVAILABLE
-                if WATERTAP_AVAILABLE:
-                    if watertap_mode == "auto":
-                        # Run smoke test for auto mode
-                        logger.info("Running WaterTAP smoke test...")
-                        watertap_available = run_watertap_smoke_test()
-                        if not watertap_available:
-                            logger.warning("WaterTAP smoke test failed, falling back to PHREEQC")
-                    else:  # mode == "on"
-                        watertap_available = True
-                        logger.info("WaterTAP forced on by configuration")
-                else:
-                    if watertap_mode == "on":
-                        raise RuntimeError("WaterTAP forced on but not available")
-                    logger.warning("WaterTAP not available, falling back to PHREEQC")
+                if watertap_mode == "auto":
+                    # Run smoke test for auto mode (isolated process with timeout)
+                    logger.info("Running WaterTAP smoke test...")
+                    watertap_available = run_watertap_smoke_test()
+                    if not watertap_available:
+                        logger.warning("WaterTAP smoke test failed, falling back to PHREEQC")
+                else:  # mode == "on"
+                    # Force attempt; actual availability will be determined in the worker
+                    watertap_available = True
+                    logger.info("WaterTAP forced on by configuration")
             except Exception as e:
                 import_error = e
                 if watertap_mode == "on":
-                    raise RuntimeError(f"WaterTAP forced on but import failed: {e}")
-                logger.warning(f"WaterTAP import failed, falling back to PHREEQC: {e}")
+                    raise RuntimeError(f"WaterTAP forced on but preliminary check failed: {e}")
+                logger.warning(f"WaterTAP preliminary check failed, falling back to PHREEQC: {e}")
 
         if watertap_available:
             # Step 2: Run WaterTAP in isolated process with timeout
