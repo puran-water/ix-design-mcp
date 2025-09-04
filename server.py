@@ -210,7 +210,7 @@ def ensure_simulation_input_complete(input_data: Dict[str, Any], resin_type: str
         if 'resin_volume_m3' not in vessel_config:
             if 'bed_volume_L' in vessel_config:
                 vessel_config['resin_volume_m3'] = vessel_config['bed_volume_L'] / 1000.0
-                logger.info(f"Calculated resin_volume_m3: {vessel_config['resin_volume_m3']:.2f} m³")
+                logger.info(f"Calculated resin_volume_m3: {vessel_config['resin_volume_m3']:.2f} m3")
             else:
                 # Calculate from diameter and bed depth if available
                 if 'diameter_m' in vessel_config and 'bed_depth_m' in vessel_config:
@@ -219,7 +219,7 @@ def ensure_simulation_input_complete(input_data: Dict[str, Any], resin_type: str
                     volume_m3 = area * vessel_config['bed_depth_m']
                     vessel_config['resin_volume_m3'] = volume_m3
                     vessel_config['bed_volume_L'] = volume_m3 * 1000
-                    logger.info(f"Calculated resin_volume_m3: {volume_m3:.2f} m³")
+                    logger.info(f"Calculated resin_volume_m3: {volume_m3:.2f} m3")
         
         # Calculate freeboard_m if missing
         if 'freeboard_m' not in vessel_config:
@@ -450,7 +450,7 @@ def ensure_simulation_input_complete(input_data: Dict[str, Any], resin_type: str
     }
     
     Required fields:
-    - water_analysis.flow_m3_hr: Feed water flow rate (m³/hr)
+    - water_analysis.flow_m3_hr: Feed water flow rate (m3/hr)
     - water_analysis.ca_mg_l: Calcium (mg/L)
     - water_analysis.mg_mg_l: Magnesium (mg/L)  
     - water_analysis.na_mg_l: Sodium (mg/L)
@@ -551,60 +551,60 @@ async def configure_sac_ix(configuration_input: Dict[str, Any]) -> Dict[str, Any
 # This tool is kept for backward compatibility but is no longer exposed via MCP
 # @mcp.tool(
 #     description="""Simulate complete SAC ion exchange cycle (service + regeneration).
-    
-    Required input structure:
-    {
-        "water_analysis": {...},
-        "vessel_configuration": {...},
-        "target_hardness_mg_l_caco3": 5.0,
-        "regeneration_config": {
-            "regenerant_type": "NaCl",  // Default, HCl/H2SO4 also supported
-            "concentration_percent": 10,  // Default 10%
-            "regenerant_dose_g_per_L": 100,  // Regenerant dose in g/L resin (industry standard)
-            "mode": "staged_optimize",  // Default - finds optimal regenerant dose
-            "target_recovery": 0.90,  // Default 90% (achievable)
-            "regeneration_stages": 5,  // Default 5 stages
-            "flow_rate_bv_hr": 2.5,  // Default 2.5 BV/hr
-            "flow_direction": "back",  // Counter-current (default)
-            "backwash_enabled": true  // Default true
-        }
-    }
-    
-    Regenerant Dose Guidelines:
-    - NaCl: 80-120 g/L (standard), 150-200 g/L (high TDS water), up to 1000 g/L (extreme)
-    - HCl: 60-80 g/L (standard)
-    - H2SO4: 80-100 g/L (standard)
-    The system automatically calculates bed volumes from dose and concentration.
-    
-    Simulates complete industrial cycle:
-    1. Service run to breakthrough
-    2. Backwash (optional) - bed expansion and fines removal
-    3. Regeneration with auto-stop at target recovery
-    4. Slow rinse (displacement)
-    5. Fast rinse (quality polish)
-    
-    Key Features:
-    - PHREEQC determines actual operating capacity and competition
-    - Dynamic breakthrough detection based on target hardness
-    - Counter-current regeneration support
-    - Automatic regenerant dosing based on recovery
-    - Full waste stream characterization
-    
-    Returns complete cycle results:
-    - Service phase:
-      - Breakthrough BV when target hardness is reached
-      - Service time in hours  
-      - PHREEQC-determined capacity factor
-      - Breakthrough curve data
-    - Regeneration phase:
-      - Actual regenerant consumption (kg)
-      - Peak waste TDS and hardness
-      - Total hardness removed (kg)
-      - Waste volume (m³)
-      - Final resin recovery (%)
-    - Total cycle time (hours)
-    - Multi-phase breakthrough data for complete cycle visualization
-    """
+#     
+#     Required input structure:
+#     {
+#         "water_analysis": {...},
+#         "vessel_configuration": {...},
+#         "target_hardness_mg_l_caco3": 5.0,
+#         "regeneration_config": {
+#             "regenerant_type": "NaCl",  // Default, HCl/H2SO4 also supported
+#             "concentration_percent": 10,  // Default 10%
+#             "regenerant_dose_g_per_L": 100,  // Regenerant dose in g/L resin (industry standard)
+#             "mode": "staged_optimize",  // Default - finds optimal regenerant dose
+#             "target_recovery": 0.90,  // Default 90% (achievable)
+#             "regeneration_stages": 5,  // Default 5 stages
+#             "flow_rate_bv_hr": 2.5,  // Default 2.5 BV/hr
+#             "flow_direction": "back",  // Counter-current (default)
+#             "backwash_enabled": true  // Default true
+#         }
+#     }
+#     
+#     Regenerant Dose Guidelines:
+#     - NaCl: 80-120 g/L (standard), 150-200 g/L (high TDS water), up to 1000 g/L (extreme)
+#     - HCl: 60-80 g/L (standard)
+#     - H2SO4: 80-100 g/L (standard)
+#     The system automatically calculates bed volumes from dose and concentration.
+#     
+#     Simulates complete industrial cycle:
+#     1. Service run to breakthrough
+#     2. Backwash (optional) - bed expansion and fines removal
+#     3. Regeneration with auto-stop at target recovery
+#     4. Slow rinse (displacement)
+#     5. Fast rinse (quality polish)
+#     
+#     Key Features:
+#     - PHREEQC determines actual operating capacity and competition
+#     - Dynamic breakthrough detection based on target hardness
+#     - Counter-current regeneration support
+#     - Automatic regenerant dosing based on recovery
+#     - Full waste stream characterization
+#     
+#     Returns complete cycle results:
+#     - Service phase:
+#       - Breakthrough BV when target hardness is reached
+#       - Service time in hours  
+#       - PHREEQC-determined capacity factor
+#       - Breakthrough curve data
+#     - Regeneration phase:
+#       - Actual regenerant consumption (kg)
+#       - Peak waste TDS and hardness
+#       - Total hardness removed (kg)
+#       - Waste volume (m3)
+#       - Final resin recovery (%)
+#     - Total cycle time (hours)
+#     - Multi-phase breakthrough data for complete cycle visualization
+#     """
 # )
 async def simulate_sac_ix(simulation_input: str) -> Dict[str, Any]:
     """Wrapper for SAC PHREEQC simulation."""
@@ -823,50 +823,50 @@ if NOTEBOOK_RUNNER_AVAILABLE:
 # This tool is kept for backward compatibility but is no longer exposed via MCP
 # @mcp.tool(
 #     description="""Simulate complete WAC ion exchange cycle (service + regeneration).
-    
-    Required input structure:
-    {
-        "water_analysis": {...},
-        "vessel_configuration": {...},
-        "resin_type": "WAC_Na" or "WAC_H",
-        "target_hardness_mg_l_caco3": 5.0,
-        "target_alkalinity_mg_l_caco3": 5.0,  // For H-form
-        "regeneration_config": {
-            // Auto-populated based on resin type
-        }
-    }
-    
-    Key differences from SAC simulation:
-    - WAC_Na: Uses two-step regeneration (acid -> water -> caustic -> water)
-    - WAC_H: Single-step acid regeneration with high efficiency
-    - H-form tracks alkalinity breakthrough and CO2 generation
-    - Both forms have pH-dependent capacity
-    
-    Breakthrough criteria:
-    - Na-form: Hardness breakthrough (same as SAC)
-    - H-form: Alkalinity breakthrough OR active sites < 10%
-    
-    Key Features:
-    - PHREEQC determines pH-dependent capacity
-    - Tracks alkalinity, pH, and CO2 throughout service
-    - Counter-current regeneration modeling
-    - Active site utilization for H-form
-    - Temporary vs permanent hardness removal metrics
-    
-    Returns complete cycle results:
-    - Service phase:
-      - Breakthrough BV based on resin-specific criteria
-      - Alkalinity and pH profiles
-      - CO2 generation (H-form)
-      - Active site utilization (H-form)
-    - Regeneration phase:
-      - Chemical consumption by step
-      - Efficiency metrics
-      - Waste characterization
-    - Performance metrics specific to WAC chemistry
-    
-    Note: H-form WAC typically requires downstream decarbonation
-    """
+#     
+#     Required input structure:
+#     {
+#         "water_analysis": {...},
+#         "vessel_configuration": {...},
+#         "resin_type": "WAC_Na" or "WAC_H",
+#         "target_hardness_mg_l_caco3": 5.0,
+#         "target_alkalinity_mg_l_caco3": 5.0,  // For H-form
+#         "regeneration_config": {
+#             // Auto-populated based on resin type
+#         }
+#     }
+#     
+#     Key differences from SAC simulation:
+#     - WAC_Na: Uses two-step regeneration (acid -> water -> caustic -> water)
+#     - WAC_H: Single-step acid regeneration with high efficiency
+#     - H-form tracks alkalinity breakthrough and CO2 generation
+#     - Both forms have pH-dependent capacity
+#     
+#     Breakthrough criteria:
+#     - Na-form: Hardness breakthrough (same as SAC)
+#     - H-form: Alkalinity breakthrough OR active sites < 10%
+#     
+#     Key Features:
+#     - PHREEQC determines pH-dependent capacity
+#     - Tracks alkalinity, pH, and CO2 throughout service
+#     - Counter-current regeneration modeling
+#     - Active site utilization for H-form
+#     - Temporary vs permanent hardness removal metrics
+#     
+#     Returns complete cycle results:
+#     - Service phase:
+#       - Breakthrough BV based on resin-specific criteria
+#       - Alkalinity and pH profiles
+#       - CO2 generation (H-form)
+#       - Active site utilization (H-form)
+#     - Regeneration phase:
+#       - Chemical consumption by step
+#       - Efficiency metrics
+#       - Waste characterization
+#     - Performance metrics specific to WAC chemistry
+#     
+#     Note: H-form WAC typically requires downstream decarbonation
+#     """
 # )
 async def simulate_wac_ix(simulation_input: str) -> Dict[str, Any]:
     """Wrapper for WAC PHREEQC simulation."""
@@ -1030,11 +1030,9 @@ def main():
     
     # Log available tools
     logger.info("Available tools:")
-    logger.info("  - configure_sac_ix: SAC vessel hydraulic sizing (no chemistry calculations)")
-    logger.info("  - simulate_sac_ix: Direct PHREEQC simulation with target hardness breakthrough")
+    logger.info("  - configure_sac_ix: SAC vessel hydraulic sizing")
     logger.info("  - configure_wac_ix: WAC vessel hydraulic sizing (Na-form or H-form)")
-    logger.info("  - simulate_wac_ix: WAC PHREEQC simulation with alkalinity tracking")
-    logger.info("  - simulate_ix_watertap: Hybrid simulation with PHREEQC chemistry + WaterTAP costing")
+    logger.info("  - simulate_ix_watertap: Unified simulation with PHREEQC chemistry + WaterTAP costing")
     if NOTEBOOK_RUNNER_AVAILABLE:
         logger.info("  - run_sac_notebook_analysis: Integrated analysis with Jupyter notebook (optional)")
     
