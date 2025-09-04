@@ -547,9 +547,10 @@ async def configure_sac_ix(configuration_input: Dict[str, Any]) -> Dict[str, Any
             "example_structure": example_structure
         }
 
-# Rename Direct PHREEQC simulation tool
-@mcp.tool(
-    description="""Simulate complete SAC ion exchange cycle (service + regeneration).
+# DEPRECATED: Use simulate_ix_watertap instead
+# This tool is kept for backward compatibility but is no longer exposed via MCP
+# @mcp.tool(
+#     description="""Simulate complete SAC ion exchange cycle (service + regeneration).
     
     Required input structure:
     {
@@ -604,7 +605,7 @@ async def configure_sac_ix(configuration_input: Dict[str, Any]) -> Dict[str, Any
     - Total cycle time (hours)
     - Multi-phase breakthrough data for complete cycle visualization
     """
-)
+# )
 async def simulate_sac_ix(simulation_input: str) -> Dict[str, Any]:
     """Wrapper for SAC PHREEQC simulation."""
     try:
@@ -818,9 +819,10 @@ if NOTEBOOK_RUNNER_AVAILABLE:
         """Execute SAC analysis notebook with parameters."""
         return await run_sac_notebook_analysis_impl(analysis_input)
 
-# Add WAC simulation tool
-@mcp.tool(
-    description="""Simulate complete WAC ion exchange cycle (service + regeneration).
+# DEPRECATED: Use simulate_ix_watertap instead
+# This tool is kept for backward compatibility but is no longer exposed via MCP
+# @mcp.tool(
+#     description="""Simulate complete WAC ion exchange cycle (service + regeneration).
     
     Required input structure:
     {
@@ -865,7 +867,7 @@ if NOTEBOOK_RUNNER_AVAILABLE:
     
     Note: H-form WAC typically requires downstream decarbonation
     """
-)
+# )
 async def simulate_wac_ix(simulation_input: str) -> Dict[str, Any]:
     """Wrapper for WAC PHREEQC simulation."""
     try:

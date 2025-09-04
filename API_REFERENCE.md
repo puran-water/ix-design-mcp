@@ -46,44 +46,7 @@ Hydraulic sizing for Weak Acid Cation (WAC) ion exchange vessels.
 }
 ```
 
-### Simulation Tools
-
-#### simulate_sac_ix
-Complete SAC cycle simulation with PHREEQC transport modeling.
-
-**Input Schema:**
-```json
-{
-  "simulation_input": {
-    "water_analysis": { ... },
-    "vessel_configuration": {
-      "diameter_m": float,
-      "bed_depth_m": float,
-      "bed_volume_L": float,
-      "resin_volume_m3": float
-    },
-    "target_hardness_mg_l_caco3": float,
-    "regeneration_config": {
-      "regenerant_type": "NaCl" | "HCl",
-      "concentration_percent": float,
-      "regenerant_dose_g_per_L": float,
-      "mode": "staged_fixed" | "staged_optimize",
-      "flow_direction": "back" | "forward",
-      "backwash_enabled": boolean
-    },
-    "full_data": boolean // Return high-resolution breakthrough data
-  }
-}
-```
-
-#### simulate_wac_ix
-WAC cycle simulation with pH-dependent capacity.
-
-**Input Schema:**
-Similar to SAC but includes:
-- `resin_type`: "WAC_Na" | "WAC_H"
-- `target_alkalinity_mg_l_caco3`: For H-form operation
-- Two-step regeneration for Na-form
+### Simulation Tool
 
 #### simulate_ix_watertap
 Unified simulation with PHREEQC chemistry and WaterTAP economics.
@@ -206,6 +169,14 @@ All simulation tools return results in this unified format:
   "warnings": [string]
 }
 ```
+
+## Deprecated Tools
+
+The following tools have been deprecated in favor of `simulate_ix_watertap`:
+- `simulate_sac_ix` - Use `simulate_ix_watertap` with `resin_type: "SAC"`
+- `simulate_wac_ix` - Use `simulate_ix_watertap` with `resin_type: "WAC_Na"` or `"WAC_H"`
+
+These functions remain in the codebase for internal use but are no longer exposed via the MCP interface.
 
 ## Error Handling
 
