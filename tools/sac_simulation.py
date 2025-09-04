@@ -371,7 +371,7 @@ class _IXDirectPhreeqcSimulation:
         vessel_config: Dict[str, Any],
         max_bv: int = 100,
         cells: int = 10,
-        enable_enhancements: bool = True,
+        enable_enhancements: bool = False,  # Disabled - PHREEQC handles exchange species natively
         capacity_factor: float = 1.0
     ) -> Tuple[np.ndarray, Dict[str, np.ndarray]]:
         """
