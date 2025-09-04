@@ -42,6 +42,7 @@ class CONFIG:
     ENABLE_TEMPERATURE_CORRECTION = False          # Temperature effects
     DEFAULT_PARTICLE_DIAMETER_MM = 0.65            # mm - Typical resin particle size
     DEFAULT_DIFFUSION_COEFFICIENT = 1e-9           # m²/s - Typical diffusion coefficient
+    DEFAULT_CELLS = 5                              # Default number of cells for PHREEQC transport
     
     # Regeneration parameters
     REGENERANT_DOSE_KG_M3 = 160.0       # kg NaCl/m³ resin
@@ -70,3 +71,26 @@ class CONFIG:
         
         # Return None if not found (will trigger fallback in calling code)
         return None
+    
+    @staticmethod
+    def get_phreeqc_database():
+        """Get PHREEQC database path."""
+        # Check environment variable first
+        env_db = os.environ.get('PHREEQC_DATABASE')
+        if env_db and Path(env_db).exists():
+            return Path(env_db)
+        
+        # Check common database paths
+        common_db_paths = [
+            Path('C:/Program Files/USGS/phreeqc-3.8.6-17100-x64/database/pitzer.dat'),
+            Path('/usr/local/share/phreeqc/database/pitzer.dat'),
+            Path('/usr/share/phreeqc/database/pitzer.dat'),
+            Path(__file__).parent.parent / 'databases' / 'pitzer.dat'
+        ]
+        
+        for path in common_db_paths:
+            if path.exists():
+                return path
+        
+        # Default to pitzer.dat in project databases folder
+        return Path(__file__).parent.parent / 'databases' / 'pitzer.dat'
