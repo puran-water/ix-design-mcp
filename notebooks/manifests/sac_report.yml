@@ -1,0 +1,11 @@
+# SAC Ion Exchange Report Manifest
+# Defines the section assembly order for Strong Acid Cation reports
+
+sections:
+  - setup_environment      # Import libraries, set units
+  - basis_of_design        # Water quality, targets
+  - sac_vessel_sizing      # Hydraulic calculations
+  - breakthrough_analysis  # Performance curves
+  - mass_balance          # Material balance
+  - economics_summary     # CAPEX/OPEX if available
+  - conclusions           # Summary and recommendations

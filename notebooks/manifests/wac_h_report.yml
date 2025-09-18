@@ -1,0 +1,14 @@
+# WAC-H Ion Exchange Report Manifest
+# Defines the section assembly order for Weak Acid Cation (H-form) reports
+
+sections:
+  - setup_environment          # Import libraries, set units
+  - basis_of_design           # Water quality, targets
+  - wac_vessel_sizing         # Hydraulic calculations with 100% expansion
+  - alkalinity_considerations # Temporary vs permanent hardness
+  - co2_generation           # CO2 production and degasser design
+  - breakthrough_analysis     # Performance curves
+  - regeneration_sequence     # Single-step acid regeneration
+  - mass_balance             # Material balance
+  - economics_summary        # CAPEX/OPEX if available
+  - conclusions             # Summary and recommendations

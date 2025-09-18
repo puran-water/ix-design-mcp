@@ -24,6 +24,22 @@ except ImportError:
     print("python-dotenv not installed, skipping .env loading", file=sys.stderr)
     pass
 
+# Ensure project root is on sys.path so our local `utils` package wins over any
+# site-packages modules with the same name.
+def _resolve_project_root() -> Path:
+    """Resolve the project root using environment override when valid."""
+    env_root = os.environ.get("IX_DESIGN_MCP_ROOT")
+    if env_root:
+        candidate = Path(env_root)
+        if candidate.exists():
+            return candidate
+    return Path(__file__).resolve().parent
+
+
+PROJECT_ROOT = _resolve_project_root()
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
 # Set required environment variables
 if 'LOCALAPPDATA' not in os.environ:
     if sys.platform == 'win32':
@@ -245,9 +261,12 @@ def ensure_simulation_input_complete(input_data: Dict[str, Any], resin_type: str
         try:
             with open(db_path, 'r') as f:
                 resin_db = json.load(f)
-            
-            if resin_type in resin_db:
-                regen_params = resin_db[resin_type].get('regeneration', {})
+
+            resin_types = resin_db.get('resin_types', {})
+            resin_entry = resin_types.get(resin_type)
+
+            if resin_entry:
+                regen_params = resin_entry.get('regeneration', {})
                 if resin_type == 'SAC':
                     input_data['regeneration_config'] = {
                         'enabled': True,
@@ -787,37 +806,59 @@ async def configure_wac_ix(configuration_input: Dict[str, Any]) -> Dict[str, Any
 
 if NOTEBOOK_RUNNER_AVAILABLE:
     @mcp.tool(
-        description="""Run complete SAC analysis with integrated simulation and visualization.
-        
-        Executes a Jupyter notebook that:
-        1. Simulates SAC ion exchange cycle (service + regeneration)
-        2. Generates interactive breakthrough curve visualizations
-        3. Produces comprehensive HTML analysis report
-        
-        Input structure (same as simulate_sac_ix):
+        description="""Generate professional IX report from simulation artifacts.
+
+        Creates HTML report with:
+        - Basis of design tables
+        - Hydraulic sizing calculations (rendered with handcalcs)
+        - Breakthrough curve visualizations
+        - Mass balance and regeneration details
+        - Economic analysis (if available)
+        - Conclusions and recommendations
+
+        Input format:
         {
-            "water_analysis": {...},
-            "vessel_configuration": {...},
-            "target_hardness_mg_l_caco3": 5.0,
-            "regeneration_config": {...}
+            "run_id": "20250918_122820_94b183ba"  # From any IX simulation
         }
-        
-        Benefits over separate simulation + plotting:
-        - No data transfer issues between tools
-        - Automatic unit conversion handling
-        - Rich HTML report with plots and tables
-        - Complete analysis in single tool call
-        
+
+        The report automatically adapts to resin type (SAC, WAC_Na, WAC_H).
+        Works with artifacts from simulate_ix_watertap or any other IX simulation tool.
+
         Returns:
-        - Key metrics (breakthrough BV, recovery, etc.)
-        - Paths to executed notebook and HTML report
-        
-        Note: Requires papermill and nbconvert packages
+        - Paths to generated notebook and HTML report
+        - Report metadata (resin type, timestamp, etc.)
         """
     )
-    async def run_sac_notebook_analysis(analysis_input: str) -> Dict[str, Any]:
-        """Execute SAC analysis notebook with parameters."""
-        return await run_sac_notebook_analysis_impl(analysis_input)
+    async def generate_ix_report(report_input: str) -> Dict[str, Any]:
+        """Generate professional IX report from simulation artifacts."""
+        try:
+            from tools.ix_report_generator import generate_ix_report as gen_report
+
+            # Parse input
+            input_data = json.loads(report_input)
+
+            if 'run_id' not in input_data:
+                return {
+                    "status": "error",
+                    "error": "Missing required field: run_id",
+                    "details": "Provide the run_id from a completed IX simulation"
+                }
+
+            # Generate report from artifacts
+            return await gen_report(run_id=input_data['run_id'])
+
+        except ImportError as e:
+            return {
+                "status": "error",
+                "error": "Report generator not available",
+                "details": f"Install required packages: {e}"
+            }
+        except Exception as e:
+            return {
+                "status": "error",
+                "error": str(e),
+                "details": "Failed to generate IX report"
+            }
 
 # DEPRECATED: Use simulate_ix_watertap instead
 # This tool is kept for backward compatibility but is no longer exposed via MCP

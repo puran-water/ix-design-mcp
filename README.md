@@ -40,6 +40,15 @@ The server employs a hybrid architecture combining PHREEQC's geochemical accurac
   - Handles SAC, WAC Na-form, and WAC H-form resins
   - Provides complete economic analysis (CAPEX, OPEX, LCOW)
   - Generates detailed breakthrough curves and performance metrics
+  - Includes full regeneration cycle modeling with proper mass balance
+
+#### Report Generation Tool
+- `generate_ix_report` - Professional HTML report generation from simulation artifacts
+  - Resin-specific report templates for SAC, WAC_Na, and WAC_H
+  - Hydraulic design calculations with verification checks
+  - Interactive breakthrough curve visualizations
+  - Mass balance and regeneration sequence details
+  - Economic analysis with cost breakdown
 
 ### Technical Specifications
 
@@ -56,6 +65,9 @@ The server employs a hybrid architecture combining PHREEQC's geochemical accurac
 - **WAC capacity**: 3.5-4.5 eq/L (pH-dependent)
 - **Service flow**: 8-40 BV/hr (design: 16 BV/hr)
 - **Regeneration efficiency**: 90-95% with counter-current flow
+- **WAC Na-form**: Two-step regeneration (HCl elution + NaOH conversion)
+- **WAC H-form**: Single-step acid regeneration with CO₂ generation
+- **Bed expansion**: 50% (WAC Na-form), 100% (WAC H-form)
 
 #### Economic Metrics
 - Capital cost accuracy: ±20% (EPA-WBS correlations)
@@ -153,6 +165,24 @@ Add to `claude_desktop_config.json`:
 }
 ```
 
+### WAC Configuration Example
+```python
+{
+  "water_analysis": {
+    "flow_m3_hr": 100,
+    "ca_mg_l": 80,
+    "mg_mg_l": 24,
+    "na_mg_l": 840,
+    "hco3_mg_l": 122,
+    "cl_mg_l": 1435,
+    "pH": 7.8
+  },
+  "target_hardness_mg_l_caco3": 5.0,
+  "target_alkalinity_mg_l_caco3": 5.0,
+  "resin_type": "WAC_Na"
+}
+```
+
 ## Output Schema
 
 ### Unified Results Structure
@@ -211,6 +241,8 @@ The models have been validated against:
 - Literature values for multi-ion selectivity
 - EPA cost estimates for water treatment systems
 - PHREEQC benchmark cases for ion exchange
+- WAC performance data for temporary hardness removal
+- Two-step regeneration sequences for WAC Na-form
 
 ## License
 

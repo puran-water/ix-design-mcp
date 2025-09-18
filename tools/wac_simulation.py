@@ -419,54 +419,104 @@ class BaseWACSimulation(BaseIXSimulation):
         """Run WAC regeneration simulation following SAC pattern."""
         logger.info(f"Starting WAC {vessel_config['resin_type']} regeneration")
         
+        acid_regen_bv = 0.0
+        caustic_regen_bv = 0.0
+
         # Handle WAC-specific two-step regeneration for Na-form
         if vessel_config['resin_type'] == 'WAC_Na':
             # WAC_Na requires two-step regeneration: acid then caustic
+            bed_volume_L = vessel_config['bed_volume_L']
+            hardness_eq = resin_state.get('ca_equiv', 0) + resin_state.get('mg_equiv', 0)
+            if bed_volume_L <= 0:
+                raise ValueError("Bed volume must be positive for regeneration calculations")
+
+            # Convert stoichiometric requirement (eq) to chemical demand (g/L)
+            acid_dose_g_per_L = (hardness_eq * 36.46 * 1.10) / bed_volume_L
+            caustic_dose_g_per_L = (hardness_eq * 40.00 * 1.20) / bed_volume_L
+
+            logger.info(
+                "WAC_Na stoichiometry: %.3f eq hardness -> %.1f g/L acid, %.1f g/L caustic",
+                hardness_eq,
+                acid_dose_g_per_L,
+                caustic_dose_g_per_L
+            )
+
             # Step 1: Acid elution (HCl)
             logger.info("Step 1: Acid elution for WAC_Na")
             acid_config = RegenerationConfig(
                 regenerant_type="HCl",
                 concentration_percent=5.0,
-                regenerant_bv=2.0,
-                regeneration_stages=3,  # Minimum required
-                mode="staged_fixed"
+                regenerant_dose_g_per_L=acid_dose_g_per_L,
+                regeneration_stages=3,
+                mode="staged_fixed",
+                flow_rate_bv_hr=2.0,
+                backwash_enabled=False,
+                slow_rinse_bv=0.5,
+                fast_rinse_bv=1.0
             )
-            
+
             final_exchange_acid, stage_results_acid = self.run_multi_stage_regeneration(
                 initial_exchange_state=resin_state,
                 vessel_config=vessel_config,
                 regen_config=acid_config
             )
-            
+            acid_regen_bv = acid_config.regenerant_bv
+
             # Step 2: Caustic conversion (NaOH)
             logger.info("Step 2: Caustic conversion for WAC_Na")
             caustic_config = RegenerationConfig(
-                regenerant_type="NaOH",  # Caustic for H-form to Na-form conversion
-                concentration_percent=5.0,  # Minimum required by validation
-                regenerant_bv=2.0,
-                regeneration_stages=3,  # Minimum required
-                mode="staged_fixed"
+                regenerant_type="NaOH",
+                concentration_percent=5.0,
+                regenerant_dose_g_per_L=caustic_dose_g_per_L,
+                regeneration_stages=3,
+                mode="staged_fixed",
+                flow_rate_bv_hr=2.0,
+                backwash_enabled=False,
+                slow_rinse_bv=0.5,
+                fast_rinse_bv=1.0
             )
-            
+
             # Use the state after acid elution as input
             final_exchange, stage_results_caustic = self.run_multi_stage_regeneration(
                 initial_exchange_state=final_exchange_acid,
                 vessel_config=vessel_config,
                 regen_config=caustic_config
             )
-            
+            caustic_regen_bv = caustic_config.regenerant_bv
+
             # Combine stage results
             stage_results = stage_results_acid + stage_results_caustic
-            
+            acid_total_g = acid_config.regenerant_dose_g_per_L * bed_volume_L
+            caustic_total_g = caustic_config.regenerant_dose_g_per_L * bed_volume_L
+            acid_regen_time = (
+                (acid_config.regenerant_bv / acid_config.flow_rate_bv_hr)
+                if acid_config.flow_rate_bv_hr else 0
+            )
+            caustic_regen_time = (
+                (caustic_config.regenerant_bv / caustic_config.flow_rate_bv_hr)
+                if caustic_config.flow_rate_bv_hr else 0
+            )
+            additional_rinse_time = sum(
+                (
+                    cfg.slow_rinse_bv + cfg.fast_rinse_bv
+                ) / cfg.flow_rate_bv_hr if cfg.flow_rate_bv_hr else 0
+                for cfg in (acid_config, caustic_config)
+            )
+            total_regenerant_g = acid_total_g + caustic_total_g
+            regen_time_hours = acid_regen_time + caustic_regen_time + additional_rinse_time
+        
         else:  # WAC_H - single acid regeneration
             logger.info("Single-step acid regeneration for WAC_H")
-            
+
             final_exchange, stage_results = self.run_multi_stage_regeneration(
                 initial_exchange_state=resin_state,
                 vessel_config=vessel_config,
                 regen_config=regen_config
             )
-        
+
+            bed_volume_L = vessel_config['bed_volume_L']
+            acid_regen_bv = regen_config.regenerant_bv
+
         # Calculate regeneration metrics
         initial_ca = resin_state.get('ca_mol', 0)
         initial_mg = resin_state.get('mg_mol', 0)
@@ -481,14 +531,9 @@ class BaseWACSimulation(BaseIXSimulation):
         mg_eluted_percent = (mg_eluted / initial_mg * 100) if initial_mg > 0 else 0
         
         # Calculate regenerant consumption
-        bed_volume_L = vessel_config['bed_volume_L']
-        
         if vessel_config['resin_type'] == 'WAC_Na':
-            # Two-step: acid + caustic
-            acid_g = 2.0 * bed_volume_L * 0.5 * 36.46  # 2 BV of 0.5N HCl
-            caustic_g = 2.0 * bed_volume_L * 0.5 * 40.0  # 2 BV of 0.5N NaOH
-            total_regenerant_g = acid_g + caustic_g
-            regen_time_hours = 4.0  # 2 BV at 2 BV/hr for each step
+            acid_dose_g_per_L = acid_total_g / bed_volume_L if bed_volume_L > 0 else 0
+            caustic_dose_g_per_L = caustic_total_g / bed_volume_L if bed_volume_L > 0 else 0
         else:  # WAC_H
             # Single acid step
             if regen_config.regenerant_type == "H2SO4":
@@ -496,11 +541,13 @@ class BaseWACSimulation(BaseIXSimulation):
             else:
                 total_regenerant_g = regen_config.regenerant_bv * bed_volume_L * 0.5 * 36.46
             regen_time_hours = regen_config.regenerant_bv / regen_config.flow_rate_bv_hr
-        
+            acid_dose_g_per_L = total_regenerant_g / bed_volume_L if bed_volume_L > 0 else 0
+            caustic_dose_g_per_L = 0.0
+
         # Calculate waste volume and TDS
         waste_volume_L = sum(sr['volume_L'] for sr in stage_results)
         max_tds = max(sr.get('waste_tds', 0) for sr in stage_results) if stage_results else 0
-        
+
         return {
             'status': 'success',
             'final_na_fraction': final_exchange.get('na_fraction', 0),
@@ -508,11 +555,15 @@ class BaseWACSimulation(BaseIXSimulation):
             'ca_eluted_percent': ca_eluted_percent,
             'mg_eluted_percent': mg_eluted_percent,
             'regenerant_consumed_g': total_regenerant_g,
-            'regenerant_consumed_g_per_L': total_regenerant_g / bed_volume_L,
+            'regenerant_consumed_g_per_L': total_regenerant_g / bed_volume_L if bed_volume_L > 0 else 0,
             'waste_volume_L': waste_volume_L,
             'waste_volume_bv': waste_volume_L / bed_volume_L if bed_volume_L > 0 else 0,
             'waste_tds_mg_L': max_tds,
-            'regeneration_time_hours': regen_time_hours
+            'regeneration_time_hours': regen_time_hours,
+            'acid_dose_g_per_L': acid_dose_g_per_L,
+            'caustic_dose_g_per_L': caustic_dose_g_per_L,
+            'acid_regenerant_bv': acid_regen_bv,
+            'caustic_regenerant_bv': caustic_regen_bv
         }
     
     def _calculate_total_x(self, exchange_state: Dict[str, float]) -> float:
@@ -980,9 +1031,23 @@ class WacNaSimulation(BaseWACSimulation):
         water = input_data.water_analysis
         vessel = input_data.vessel_configuration
         target_hardness = input_data.target_hardness_mg_l_caco3
-        
+
         logger.info("Starting WAC Na-form simulation")
-        
+
+        service_vessels = max(vessel.number_service, 1)
+        total_flow_m3_hr = water.flow_m3_hr
+        if service_vessels > 1:
+            flow_per_vessel_m3_hr = total_flow_m3_hr / service_vessels
+            logger.info(
+                "Distributing %.2f m3/hr across %d service vessels (%.2f m3/hr each)",
+                total_flow_m3_hr,
+                service_vessels,
+                flow_per_vessel_m3_hr
+            )
+            water = water.model_copy(update={"flow_m3_hr": flow_per_vessel_m3_hr})
+        else:
+            flow_per_vessel_m3_hr = total_flow_m3_hr
+
         # Validate water composition
         self._validate_water_composition(water.model_dump())
         
@@ -1063,7 +1128,7 @@ class WacNaSimulation(BaseWACSimulation):
             logger.warning(f"Target hardness {target_hardness} mg/L not reached in {max_bv} BV")
         
         # Calculate service time
-        flow_rate_m3_hr = water.flow_m3_hr
+        flow_rate_m3_hr = flow_per_vessel_m3_hr
         bed_volume_m3 = vessel.bed_volume_L / 1000
         service_time_hours = breakthrough_bv * bed_volume_m3 / flow_rate_m3_hr if flow_rate_m3_hr > 0 else 0
         
@@ -1101,31 +1166,50 @@ class WacNaSimulation(BaseWACSimulation):
             water_analysis=water
         )
         
-        # Create regeneration config for WAC_Na (two-step process)
         from tools.sac_simulation import RegenerationConfig
-        regen_config = RegenerationConfig(
-            regenerant_type="NaCl",  # Will be overridden for two-step
-            concentration_percent=5.0,
-            regenerant_bv=2.0,
-            regeneration_stages=3,
-            mode="staged_fixed",
-            flow_rate_bv_hr=2.0,
-            flow_direction="back",
-            backwash_enabled=False  # WAC typically doesn't need backwash
-        )
-        
-        # Run regeneration
+
         try:
             regen_results = self.run_regeneration(
                 resin_state=resin_state,
                 vessel_config=vessel.model_dump(),
-                regen_config=regen_config
+                regen_config=RegenerationConfig(
+                    regenerant_type="NaCl",
+                    concentration_percent=5.0,
+                    regeneration_stages=3,
+                    mode="staged_fixed",
+                    flow_rate_bv_hr=2.0,
+                    flow_direction="back",
+                    backwash_enabled=False
+                )
             )
             regeneration_time_hours = regen_results.get('regeneration_time_hours', 4.0)
+            if service_vessels > 1 and regen_results:
+                regen_results = regen_results.copy()
+                regen_results['service_vessels'] = service_vessels
+                if regen_results.get('regenerant_consumed_g') is not None:
+                    per_vessel_regen = regen_results['regenerant_consumed_g']
+                    regen_results['regenerant_consumed_g_per_vessel'] = per_vessel_regen
+                    regen_results['regenerant_consumed_g'] = per_vessel_regen * service_vessels
+                if regen_results.get('waste_volume_L') is not None:
+                    per_vessel_waste = regen_results['waste_volume_L']
+                    regen_results['waste_volume_L_per_vessel'] = per_vessel_waste
+                    regen_results['waste_volume_L'] = per_vessel_waste * service_vessels
+                    if vessel.bed_volume_L > 0:
+                        regen_results['waste_volume_bv'] = regen_results['waste_volume_L'] / (
+                            vessel.bed_volume_L * service_vessels
+                        )
+                if regen_results.get('regenerant_consumed_g_per_L') is not None:
+                    regen_results['regenerant_consumed_g_per_L_per_vessel'] = regen_results[
+                        'regenerant_consumed_g_per_L'
+                    ]
             logger.info(f"WAC_Na regeneration completed: {regeneration_time_hours:.1f} hours")
         except Exception as e:
             logger.warning(f"Regeneration simulation failed: {e}. Using estimate.")
             regeneration_time_hours = 4.0
+            regen_results = {
+                'status': 'error',
+                'regeneration_time_hours': regeneration_time_hours
+            }
         
         # Prepare output
         return WACSimulationOutput(
@@ -1152,9 +1236,16 @@ class WacNaSimulation(BaseWACSimulation):
                 'max_bv': max_bv,
                 'resin_type': 'WAC_Na',
                 'hardness_loading_meq_L': hardness_meq_L,
-                'theoretical_bv': max_bv / 1.2  # Remove buffer factor
+                'theoretical_bv': max_bv / 1.2,
+                'service_vessels': service_vessels,
+                'system_flow_m3_hr': total_flow_m3_hr,
+                'flow_per_vessel_m3_hr': flow_per_vessel_m3_hr,
+                'total_bed_volume_L': vessel.bed_volume_L * service_vessels,
+                'bed_volume_L_per_vessel': vessel.bed_volume_L,
+                'dataset_scope': 'per_vessel'
             },
-            total_cycle_time_hours=service_time_hours + regeneration_time_hours
+            total_cycle_time_hours=service_time_hours + regeneration_time_hours,
+            regeneration_results=regen_results
         )
 
 
@@ -1219,9 +1310,23 @@ class WacHSimulation(BaseWACSimulation):
         vessel = input_data.vessel_configuration
         target_hardness = input_data.target_hardness_mg_l_caco3
         target_alkalinity = input_data.target_alkalinity_mg_l_caco3 or CONFIG.WAC_ALKALINITY_LEAK_MG_L
-        
+
         logger.info("Starting WAC H-form simulation")
-        
+
+        service_vessels = max(vessel.number_service, 1)
+        total_flow_m3_hr = water.flow_m3_hr
+        if service_vessels > 1:
+            flow_per_vessel_m3_hr = total_flow_m3_hr / service_vessels
+            logger.info(
+                "Distributing %.2f m3/hr across %d service vessels (%.2f m3/hr each)",
+                total_flow_m3_hr,
+                service_vessels,
+                flow_per_vessel_m3_hr
+            )
+            water = water.model_copy(update={"flow_m3_hr": flow_per_vessel_m3_hr})
+        else:
+            flow_per_vessel_m3_hr = total_flow_m3_hr
+
         # Validate water composition
         self._validate_water_composition(water.model_dump())
         
@@ -1316,13 +1421,57 @@ class WacHSimulation(BaseWACSimulation):
             logger.warning(f"No breakthrough criteria met in {max_bv} BV")
         
         # Calculate service time
-        flow_rate_m3_hr = water.flow_m3_hr
+        flow_rate_m3_hr = flow_per_vessel_m3_hr
         bed_volume_m3 = vessel.bed_volume_L / 1000
         service_time_hours = breakthrough_bv * bed_volume_m3 / flow_rate_m3_hr if flow_rate_m3_hr > 0 else 0
-        
+
         # Calculate performance metrics
         performance_metrics = self._calculate_performance_metrics(breakthrough_data, water, breakthrough_bv)
-        
+
+        # Extract final resin state for regeneration
+        resin_state = self._extract_final_resin_state(
+            service_bv=breakthrough_bv,
+            vessel_config=vessel.model_dump(),
+            water_analysis=water
+        )
+
+        from tools.sac_simulation import RegenerationConfig
+
+        # Calculate regenerant dose for WAC_H based on alkalinity loading
+        bed_volume_L = vessel.bed_volume_L
+        alkalinity_eq = resin_state.get('h_equiv', 0)  # H+ equivalents to regenerate
+        # Use 110% excess for acid regeneration
+        acid_dose_g_per_L = (alkalinity_eq * 36.46 * 1.10) / bed_volume_L if bed_volume_L > 0 else 100
+
+        try:
+            # WAC_H uses acid regeneration (typically HCl or H2SO4)
+            regen_results = self.run_regeneration(
+                resin_state=resin_state,
+                vessel_config=vessel.model_dump(),
+                regen_config=RegenerationConfig(
+                    regenerant_type="HCl",  # Using HCl for H-form regeneration
+                    concentration_percent=2.0,  # 2% HCl solution
+                    regenerant_dose_g_per_L=acid_dose_g_per_L,  # Calculated dose
+                    regeneration_stages=2,  # Simplified regeneration for H-form
+                    mode="staged_fixed",
+                    flow_rate_bv_hr=2.0,
+                    flow_direction="back",
+                    backwash_enabled=False,
+                    slow_rinse_bv=0.5,
+                    fast_rinse_bv=1.0
+                )
+            )
+            regeneration_time_hours = regen_results.get("total_regen_time_hours", 2.5)
+            logger.info(f"WAC_H regeneration time: {regeneration_time_hours:.2f} hours")
+        except Exception as e:
+            logger.warning(f"Regeneration simulation failed: {e}")
+            regeneration_time_hours = 2.5  # Default estimate
+            regen_results = {
+                "status": "estimated",
+                "total_regen_time_hours": regeneration_time_hours,
+                "warning": str(e)
+            }
+
         # Calculate capacity utilization
         theoretical_capacity = CONFIG.WAC_H_WORKING_CAPACITY * vessel.bed_volume_L
         feed_alkalinity_eq = (water.hco3_mg_l / CONFIG.HCO3_EQUIV_WEIGHT) * flow_rate_m3_hr * service_time_hours
@@ -1388,9 +1537,16 @@ class WacHSimulation(BaseWACSimulation):
                 'resin_type': 'WAC_H',
                 'breakthrough_reason': reason,
                 'alkalinity_loading_meq_L': alkalinity_meq_L,
-                'theoretical_bv': max_bv / 1.2  # Remove buffer factor
+                'theoretical_bv': max_bv / 1.2,
+                'service_vessels': service_vessels,
+                'system_flow_m3_hr': total_flow_m3_hr,
+                'flow_per_vessel_m3_hr': flow_per_vessel_m3_hr,
+                'total_bed_volume_L': vessel.bed_volume_L * service_vessels,
+                'bed_volume_L_per_vessel': vessel.bed_volume_L,
+                'dataset_scope': 'per_vessel'
             },
-            total_cycle_time_hours=service_time_hours + 2.5  # Add regen time estimate
+            total_cycle_time_hours=service_time_hours + regeneration_time_hours,
+            regeneration_results=regen_results
         )
 
 

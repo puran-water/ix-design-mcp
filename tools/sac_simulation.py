@@ -131,30 +131,40 @@ class RegenerationConfig(BaseModel):
     @validator('regenerant_bv', always=True, pre=False)
     def calculate_bv_from_dose(cls, v, values):
         """Always calculate BV from dose. This is an internal field."""
-        # If dose provided, calculate BV
-        if 'regenerant_dose_g_per_L' in values and values['regenerant_dose_g_per_L'] is not None:
-            dose = values['regenerant_dose_g_per_L']
-            concentration = values.get('concentration_percent', 10.0)
-            # BV = dose / (concentration * 10) where concentration*10 converts % to g/L
+        dose = values.get('regenerant_dose_g_per_L')
+        concentration = values.get('concentration_percent', 10.0)
+
+        # Respect explicitly provided bed volume when dose is not supplied
+        if dose is None and v is not None:
+            return float(v)
+
+        if dose is not None and concentration > 0:
             calculated_bv = dose / (concentration * 10)
-            logger.info(f"Calculated regenerant BV: {calculated_bv:.2f} from dose {dose} g/L at {concentration}%")
+            logger.info(
+                "Calculated regenerant BV: %.2f from dose %.1f g/L at %.1f%%",
+                calculated_bv,
+                dose,
+                concentration
+            )
             return float(calculated_bv)
-            
+
         # Default dose and BV based on regenerant type if dose not provided
         regenerant_type = values.get('regenerant_type', 'NaCl')
-        concentration = values.get('concentration_percent', 10.0)
-        
-        # Industry-standard doses
+
         default_doses = {
             'NaCl': 100,   # 100 g/L is standard for SAC
             'HCl': 70,     # 70 g/L for HCl regeneration
             'H2SO4': 90    # 90 g/L for H2SO4
         }
         default_dose = default_doses.get(regenerant_type, 100)
-        default_bv = default_dose / (concentration * 10)
-        
-        logger.info(f"Using default regenerant dose: {default_dose} g/L for {regenerant_type}")
-        logger.info(f"Calculated default BV: {default_bv:.2f} at {concentration}%")
+        default_bv = default_dose / (concentration * 10) if concentration > 0 else 3.5
+
+        logger.info(
+            "Using default regenerant dose: %.1f g/L for %s (BV %.2f)",
+            default_dose,
+            regenerant_type,
+            default_bv
+        )
         return float(default_bv)
     
     @validator('min_regenerant_bv', 'max_regenerant_bv')
@@ -2148,6 +2158,21 @@ def _run_service_only_simulation(input_data: SACSimulationInput) -> SACSimulatio
     vessel = input_data.vessel_configuration
     target_hardness = input_data.target_hardness_mg_l_caco3
     full_data = input_data.full_data
+
+    # Split total system flow across parallel service vessels before simulation
+    service_vessels = max(getattr(vessel, "number_service", 1), 1)
+    total_flow_m3_hr = water.flow_m3_hr
+    if service_vessels > 1:
+        flow_per_vessel_m3_hr = total_flow_m3_hr / service_vessels
+        logger.info(
+            "Distributing %.2f m3/hr across %d service vessels (%.2f m3/hr each)",
+            total_flow_m3_hr,
+            service_vessels,
+            flow_per_vessel_m3_hr
+        )
+        water = water.model_copy(update={"flow_m3_hr": flow_per_vessel_m3_hr})
+    else:
+        flow_per_vessel_m3_hr = total_flow_m3_hr
     
     # USE BED VOLUME FROM CONFIGURATION DIRECTLY
     bed_volume_L = vessel.bed_volume_L  # From configuration tool
@@ -2175,6 +2200,9 @@ def _run_service_only_simulation(input_data: SACSimulationInput) -> SACSimulatio
     max_bv = int(theoretical_bv * 1.2) if theoretical_bv > 0 else 200
     
     logger.info(f"Starting simulation:")
+    logger.info(
+        f"  - Service vessels: {service_vessels} (flow per vessel: {flow_per_vessel_m3_hr:.2f} m3/hr)"
+    )
     logger.info(f"  - Bed volume: {bed_volume_L:.1f} L")
     logger.info(f"  - Theoretical BV: {theoretical_bv:.1f}")
     logger.info(f"  - Simulation BV: {max_bv} (theoretical + 20% buffer)")
@@ -2232,7 +2260,7 @@ def _run_service_only_simulation(input_data: SACSimulationInput) -> SACSimulatio
         raise
     
     # Calculate service time using bed volume from config
-    flow_L_hr = water.flow_m3_hr * 1000
+    flow_L_hr = flow_per_vessel_m3_hr * 1000
     service_time_hours = breakthrough_bv * bed_volume_L / flow_L_hr
     
     # Calculate actual capacity utilization from PHREEQC results
@@ -2269,8 +2297,12 @@ def _run_service_only_simulation(input_data: SACSimulationInput) -> SACSimulatio
     
     # Calculate regenerant requirements
     hardness_removed_eq = hardness_meq_L * breakthrough_bv * bed_volume_L / 1000
+    hardness_removed_eq_total = hardness_removed_eq * service_vessels
     # Regenerant based on bed volume (from config)
     regenerant_kg = bed_volume_L / 1000 * CONFIG.REGENERANT_DOSE_KG_M3
+    regenerant_kg_total = regenerant_kg * service_vessels
+    total_capacity_eq_system = total_capacity_eq * service_vessels
+    total_bed_volume_L = bed_volume_L * service_vessels
     
     # Calculate performance metrics
     performance_metrics = _calculate_sac_performance_metrics(
@@ -2293,13 +2325,20 @@ def _run_service_only_simulation(input_data: SACSimulationInput) -> SACSimulatio
         performance_metrics=performance_metrics,
         simulation_details={
             "bed_volume_L": bed_volume_L,
+            "total_bed_volume_L": total_bed_volume_L,
             "theoretical_bv": round(theoretical_bv, 1),
             "max_bv_simulated": max_bv,
             "cells": CONFIG.DEFAULT_CELLS,
             "porosity": porosity,
             "hardness_removed_eq": round(hardness_removed_eq, 1),
+            "hardness_removed_eq_total": round(hardness_removed_eq_total, 1),
             "regenerant_required_kg": round(regenerant_kg, 1),
-            "total_capacity_eq": round(total_capacity_eq, 1)
+            "regenerant_required_kg_total": round(regenerant_kg_total, 1),
+            "total_capacity_eq": round(total_capacity_eq, 1),
+            "total_capacity_eq_system": round(total_capacity_eq_system, 1),
+            "service_vessels": service_vessels,
+            "system_flow_m3_hr": total_flow_m3_hr,
+            "flow_per_vessel_m3_hr": flow_per_vessel_m3_hr
         }
     )
 
@@ -2311,6 +2350,20 @@ def _run_full_cycle_simulation(input_data: SACSimulationInput) -> SACSimulationO
     target_hardness = input_data.target_hardness_mg_l_caco3
     regen_config = input_data.regeneration_config
     full_data = input_data.full_data
+
+    service_vessels = max(getattr(vessel, "number_service", 1), 1)
+    total_flow_m3_hr = water.flow_m3_hr
+    if service_vessels > 1:
+        flow_per_vessel_m3_hr = total_flow_m3_hr / service_vessels
+        logger.info(
+            "Full-cycle sim: distributing %.2f m3/hr across %d service vessels (%.2f m3/hr each)",
+            total_flow_m3_hr,
+            service_vessels,
+            flow_per_vessel_m3_hr
+        )
+        water = water.model_copy(update={"flow_m3_hr": flow_per_vessel_m3_hr})
+    else:
+        flow_per_vessel_m3_hr = total_flow_m3_hr
     
     # Create simulation instance
     sim = SACSimulation()  # Use new unified class
@@ -2339,7 +2392,7 @@ def _run_full_cycle_simulation(input_data: SACSimulationInput) -> SACSimulationO
         breakthrough_found = breakthrough_bv is not None and breakthrough_bv > 0
         
         # Calculate service time
-        flow_L_hr = water.flow_m3_hr * 1000
+        flow_L_hr = flow_per_vessel_m3_hr * 1000
         service_time_hours = breakthrough_bv * vessel.bed_volume_L / flow_L_hr
         
         # Calculate capacity metrics
@@ -2353,6 +2406,32 @@ def _run_full_cycle_simulation(input_data: SACSimulationInput) -> SACSimulationO
         if not full_data:
             cycle_data = _smart_sample_cycle_data(cycle_data, regen_config)
         
+        # Scale regeneration results to total system flow if multiple vessels are in service
+        if service_vessels > 1 and regen_results is not None:
+            regen_update = {}
+            if regen_results.regenerant_consumed_kg is not None:
+                regen_update['regenerant_consumed_kg'] = round(
+                    regen_results.regenerant_consumed_kg * service_vessels,
+                    1
+                )
+            if regen_results.total_hardness_removed_kg is not None:
+                regen_update['total_hardness_removed_kg'] = round(
+                    regen_results.total_hardness_removed_kg * service_vessels,
+                    2
+                )
+            if regen_results.waste_volume_m3 is not None:
+                regen_update['waste_volume_m3'] = round(
+                    regen_results.waste_volume_m3 * service_vessels,
+                    1
+                )
+            if regen_results.hardness_eluted_kg_caco3 is not None:
+                regen_update['hardness_eluted_kg_caco3'] = round(
+                    regen_results.hardness_eluted_kg_caco3 * service_vessels,
+                    3
+                )
+            if regen_update:
+                regen_results = regen_results.model_copy(update=regen_update)
+
         # Calculate total cycle time
         total_cycle_time = service_time_hours + regen_results.regeneration_time_hours
         
@@ -2396,11 +2475,20 @@ def _run_full_cycle_simulation(input_data: SACSimulationInput) -> SACSimulationO
             performance_metrics=performance_metrics,
             simulation_details={
                 "bed_volume_L": vessel.bed_volume_L,
+                "total_bed_volume_L": vessel.bed_volume_L * service_vessels,
                 "theoretical_bv": round(theoretical_bv, 1),
                 "cells": CONFIG.DEFAULT_CELLS,
                 "porosity": CONFIG.BED_POROSITY,
                 "cycle_phases": list(set(cycle_data['phases'])),
-                "total_data_points": len(cycle_data['bed_volumes'])
+                "total_data_points": len(cycle_data['bed_volumes']),
+                "service_vessels": service_vessels,
+                "system_flow_m3_hr": total_flow_m3_hr,
+                "flow_per_vessel_m3_hr": flow_per_vessel_m3_hr,
+                "total_capacity_eq_system": round(
+                    CONFIG.RESIN_CAPACITY_EQ_L * vessel.bed_volume_L * service_vessels,
+                    1
+                ),
+                "dataset_scope": "per_vessel"
             },
             regeneration_results=regen_results,
             total_cycle_time_hours=round(total_cycle_time, 1)
