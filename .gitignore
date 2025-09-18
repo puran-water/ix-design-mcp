@@ -34,6 +34,11 @@ env/
 *.swo
 *~
 
+# Claude and Codex session data
+.claude/
+.codex/
+codex_next_steps.md
+
 # Project specific
 results/
 *.log
@@ -44,6 +49,7 @@ Thumbs.db
 # Jupyter
 .ipynb_checkpoints/
 *.ipynb_checkpoints
+notebooks/compiled/
 
 # Testing
 .pytest_cache/
