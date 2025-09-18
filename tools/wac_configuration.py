@@ -142,7 +142,10 @@ def configure_wac_vessel(input_data: WACConfigurationInput) -> WACConfigurationO
     resin_params = resin_db["resin_types"][resin_type]
     
     # Water chemistry analysis
-    total_hardness = water.ca_mg_l + water.mg_mg_l * (CONFIG.CA_EQUIV_WEIGHT / CONFIG.MG_EQUIV_WEIGHT)
+    total_hardness = (
+        (water.ca_mg_l / CONFIG.CA_EQUIV_WEIGHT) +
+        (water.mg_mg_l / CONFIG.MG_EQUIV_WEIGHT)
+    ) * CONFIG.ALKALINITY_EQUIV_WEIGHT
     alkalinity_as_caco3 = water.hco3_mg_l / CONFIG.HCO3_EQUIV_WEIGHT * CONFIG.ALKALINITY_EQUIV_WEIGHT
     
     # Determine temporary vs permanent hardness

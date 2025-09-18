@@ -8,11 +8,27 @@ Main entry point for hybrid simulations.
 import logging
 import json
 import os
+import sys
 from typing import Dict, Any, Optional, Literal
 from datetime import datetime
 from pathlib import Path
 import time
 import faulthandler
+
+
+def _resolve_project_root() -> Path:
+    """Resolve project root honoring IX_DESIGN_MCP_ROOT when valid."""
+    env_root = os.environ.get("IX_DESIGN_MCP_ROOT")
+    if env_root:
+        candidate = Path(env_root)
+        if candidate.exists():
+            return candidate
+    return Path(__file__).resolve().parent.parent
+
+
+PROJECT_ROOT = _resolve_project_root()
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
 
 # Import schemas
 from utils.schemas import (
@@ -504,11 +520,17 @@ def run_phreeqc_engine(
     
     elif ix_input.resin_type in ["WAC_Na", "WAC_H"]:
         # Add WAC-specific fields
+        # Add bed_expansion_percent (required for WAC vessels)
+        default_expansion = 50.0 if ix_input.resin_type == "WAC_Na" else 100.0
+        legacy_input["vessel_configuration"]["bed_expansion_percent"] = (
+            getattr(ix_input.vessel, 'bed_expansion_percent', None) or default_expansion
+        )
+
         if ix_input.resin_type == "WAC_H":
             legacy_input["target_alkalinity_mg_l_caco3"] = (
                 ix_input.targets.alkalinity_mg_l_caco3 or 5.0
             )
-        
+
         wac_input = WACSimulationInput(**legacy_input)
         results = simulate_wac_system(wac_input)
         if hasattr(results, 'model_dump') and callable(getattr(results, 'model_dump')):
@@ -538,23 +560,23 @@ def estimate_costs_from_phreeqc(
     # Extract key parameters
     vessel = ix_input.vessel
     pricing = ix_input.pricing
-    regen = phreeqc_results.get("regeneration_results", {})
-    
+    regen = phreeqc_results.get("regeneration_results") or {}
+
     # Capital costs (simplified correlations)
     resin_volume_m3 = vessel.resin_volume_m3 or (
         3.14159 * (vessel.diameter_m/2)**2 * vessel.bed_depth_m
     )
-    
+
     vessel_cost = 50000 * (resin_volume_m3 ** 0.7)
     resin_cost = (pricing.resin_usd_m3 if pricing else 2800) * resin_volume_m3
     pump_cost = 15000  # Fixed estimate
     instrumentation = (vessel_cost + resin_cost) * 0.15
-    
+
     total_capital = (vessel_cost + resin_cost + pump_cost + instrumentation) * 2.5
-    
-    # Operating costs (annual)
-    regenerant_kg = regen.get("regenerant_consumed_kg", 100)
-    cycle_hours = regen.get("total_cycle_time_hours", 24)
+
+    # Operating costs (annual) - with safety checks for missing regeneration data
+    regenerant_kg = regen.get("regenerant_consumed_kg", 100) if regen else 100
+    cycle_hours = regen.get("total_cycle_time_hours", 24) if regen else 24
     cycles_per_year = 8760 / cycle_hours
     
     regenerant_cost = regenerant_kg * cycles_per_year * (pricing.nacl_usd_kg if pricing else 0.12)
