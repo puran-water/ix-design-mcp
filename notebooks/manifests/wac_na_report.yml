@@ -8,6 +8,5 @@ sections:
   - alkalinity_considerations # Temporary vs permanent hardness
   - breakthrough_analysis     # Performance curves
   - regeneration_sequence     # Two-step regeneration details
-  - mass_balance             # Material balance
-  - economics_summary        # CAPEX/OPEX if available
-  - conclusions             # Summary and recommendations
+  - mass_balance                # Material balance
+  - economics_summary_data_only # CAPEX/OPEX data only
