@@ -10,10 +10,11 @@ from __future__ import annotations
 import json
 import logging
 import yaml
+import math
 from dataclasses import dataclass, field
 from pathlib import Path
 from datetime import datetime
-from typing import Dict, Any, Callable, List, Optional
+from typing import Dict, Any, Callable, List, Optional, Union
 import asyncio
 import sys
 import os
@@ -31,6 +32,26 @@ except ImportError as e:
 
 logger = logging.getLogger(__name__)
 
+# Molecular weights for equivalent calculations
+MOLECULAR_WEIGHTS = {
+    'Ca_2+': 40.078,
+    'Mg_2+': 24.305,
+    'Na_+': 22.990,
+    'HCO3_-': 61.017,
+    'Cl_-': 35.453,
+    'SO4_2-': 96.06
+}
+
+# Valences for equivalent weight calculations
+VALENCES = {
+    'Ca_2+': 2,
+    'Mg_2+': 2,
+    'Na_+': 1,
+    'HCO3_-': 1,
+    'Cl_-': 1,
+    'SO4_2-': 2
+}
+
 # Project structure
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 NOTEBOOK_ROOT = PROJECT_ROOT / "notebooks"
@@ -38,6 +59,132 @@ MANIFESTS_DIR = NOTEBOOK_ROOT / "manifests"
 SECTIONS_DIR = NOTEBOOK_ROOT / "sections"
 COMPILED_DIR = NOTEBOOK_ROOT / "compiled"
 OUTPUT_DIR = PROJECT_ROOT / "output" / "reports"
+
+
+def safe_extract(data: Dict[str, Any], path: str, default: Any = None) -> Any:
+    """Safely extract nested values from dictionaries.
+
+    Args:
+        data: The dictionary to extract from
+        path: Dot-separated path to the value (e.g., 'performance.service_hours')
+        default: Default value if path not found (None by default)
+
+    Returns:
+        The value at the path or default if not found
+    """
+    keys = path.split('.')
+    value = data
+
+    for key in keys:
+        if isinstance(value, dict):
+            value = value.get(key)
+            if value is None:
+                return default
+        else:
+            return default
+
+    # Don't return empty dicts/lists, use default instead
+    if isinstance(value, (dict, list)) and not value:
+        return default
+
+    return value
+
+
+def mg_to_meq(concentration_mg_l: float, ion: str) -> float:
+    """Convert mg/L to meq/L using proper molecular weights.
+
+    Args:
+        concentration_mg_l: Concentration in mg/L
+        ion: Ion formula (e.g., 'Ca_2+', 'Mg_2+')
+
+    Returns:
+        Concentration in meq/L
+    """
+    if concentration_mg_l is None or math.isnan(concentration_mg_l):
+        return None
+
+    mw = MOLECULAR_WEIGHTS.get(ion)
+    valence = VALENCES.get(ion)
+
+    if not mw or not valence:
+        # Fallback for unknown ions
+        logger.warning(f"Unknown ion {ion}, using approximate conversion")
+        return concentration_mg_l / 20  # Approximate
+
+    equivalent_weight = mw / valence
+    return concentration_mg_l / equivalent_weight
+
+
+def format_with_units(value: Union[float, None], unit_str: str, precision: int = 2) -> str:
+    """Format a value with units for display.
+
+    Args:
+        value: The numeric value
+        unit_str: Unit string to append
+        precision: Number of decimal places
+
+    Returns:
+        Formatted string or '—' for None/NaN values
+    """
+    if value is None or (isinstance(value, float) and math.isnan(value)):
+        return "—"
+
+    return f"{value:.{precision}f} {unit_str}"
+
+
+@dataclass
+class IXReportData:
+    """Validated data structure for IX reports."""
+    performance: Dict[str, Any]
+    mass_balance: Dict[str, Any]
+    ion_tracking: Dict[str, Any]
+    design: Dict[str, Any]
+    economics: Optional[Dict[str, Any]] = None
+    breakthrough_data: Optional[Dict[str, Any]] = None
+
+    @classmethod
+    def from_simulation(cls, sim_result: Dict[str, Any], design_inputs: Dict[str, Any] = None) -> 'IXReportData':
+        """Create from simulation results with validation."""
+        # Extract main sections with defaults
+        performance = sim_result.get('performance', {})
+        mass_balance = sim_result.get('mass_balance', {})
+        ion_tracking = sim_result.get('ion_tracking', {})
+        economics = sim_result.get('economics')
+        breakthrough_data = sim_result.get('breakthrough_data')
+
+        # Use design_inputs if provided, otherwise try to extract from sim_result
+        if design_inputs:
+            design = design_inputs
+        else:
+            design = sim_result.get('input', {})
+
+        # Validate required fields
+        required_performance = ['service_bv_to_target', 'service_hours']
+        missing = [f for f in required_performance if f not in performance]
+        if missing:
+            logger.warning(f"Missing performance fields: {missing}")
+
+        return cls(
+            performance=performance,
+            mass_balance=mass_balance,
+            ion_tracking=ion_tracking,
+            design=design,
+            economics=economics,
+            breakthrough_data=breakthrough_data
+        )
+
+    def validate_critical(self) -> bool:
+        """Validate that critical data is present."""
+        # Check for minimal required data
+        if not self.performance:
+            logger.error("No performance data available")
+            return False
+
+        if not self.ion_tracking.get('feed_mg_l'):
+            logger.error("No feed water composition available")
+            return False
+
+        return True
 
 
 @dataclass
@@ -88,7 +235,7 @@ class ReportSpec:
         param_code = """# Parameters injected by papermill
 # This cell will be tagged for hiding in HTML export"""
         param_cell = nbformat.v4.new_code_cell(param_code)
-        param_cell.metadata["tags"] = ["parameters", "hide-cell"]
+        param_cell.metadata["tags"] = ["parameters", "hide-cell", "hide-input"]
         notebook.cells.append(param_cell)
 
         # Assemble sections from manifest
@@ -104,6 +251,16 @@ class ReportSpec:
                 notebook.cells.append(nbformat.v4.new_markdown_cell(
                     f"## {section_id.replace('_', ' ').title()}"
                 ))
+
+                # Auto-tag code cells to hide input
+                for cell in section_nb.cells:
+                    if cell.cell_type == 'code':
+                        if 'tags' not in cell.metadata:
+                            cell.metadata['tags'] = []
+                        # Add hide-input tag if not already present
+                        if 'hide-input' not in cell.metadata['tags']:
+                            cell.metadata['tags'].append('hide-input')
+
                 notebook.cells.extend(section_nb.cells)
             except Exception as e:
                 logger.error(f"Failed to read section {section_id}: {e}")
@@ -167,9 +324,6 @@ def get_report_spec(resin_code: str) -> ReportSpec:
 def _sac_parameters(base_payload: Dict[str, Any]) -> Dict[str, Any]:
     """Extract SAC-specific parameters"""
     sim = base_payload["simulation"]
-    perf = sim.get("performance", {})
-    mass_bal = sim.get("mass_balance", {})
-    econ = sim.get("economics", {})
 
     # Check for breakthrough data file
     artifact_dir = Path(base_payload.get("artifact_dir", ""))
@@ -177,20 +331,20 @@ def _sac_parameters(base_payload: Dict[str, Any]) -> Dict[str, Any]:
 
     return {
         # Performance metrics
-        "service_volume_bv": perf.get("service_bv_to_target", 0),
-        "service_hours": perf.get("service_hours", 0),
-        "effluent_hardness": perf.get("effluent_hardness_mg_l_caco3", 0),
-        "capacity_utilization": perf.get("capacity_utilization_percent", 0),
+        "service_volume_bv": safe_extract(sim, "performance.service_bv_to_target", None),
+        "service_hours": safe_extract(sim, "performance.service_hours", None),
+        "effluent_hardness": safe_extract(sim, "performance.effluent_hardness_mg_l_caco3", None),
+        "capacity_utilization": safe_extract(sim, "performance.capacity_utilization_percent", None),
 
         # Mass balance
-        "regenerant_kg_cycle": mass_bal.get("regenerant_kg_cycle", 0),
-        "waste_volume_m3": mass_bal.get("waste_m3_cycle", 0),
-        "hardness_removed_kg": mass_bal.get("hardness_removed_kg_caco3", 0),
+        "regenerant_kg_cycle": safe_extract(sim, "mass_balance.regenerant_kg_cycle", None),
+        "waste_volume_m3": safe_extract(sim, "mass_balance.waste_m3_cycle", None),
+        "hardness_removed_kg": safe_extract(sim, "mass_balance.hardness_removed_kg_caco3", None),
 
         # Economics (if available)
-        "capital_cost_usd": econ.get("capital_cost_usd", 0),
-        "opex_usd_year": econ.get("operating_cost_usd_year", 0),
-        "lcow_usd_m3": econ.get("lcow_usd_m3", 0),
+        "capital_cost_usd": safe_extract(sim, "economics.capital_cost_usd", None),
+        "opex_usd_year": safe_extract(sim, "economics.operating_cost_usd_year", None),
+        "lcow_usd_m3": safe_extract(sim, "economics.lcow_usd_m3", None),
 
         # Data paths
         "breakthrough_curve_path": str(breakthrough_csv) if breakthrough_csv and breakthrough_csv.exists() else None,
@@ -210,9 +364,6 @@ register_report(ReportSpec(
 def _wac_na_parameters(base_payload: Dict[str, Any]) -> Dict[str, Any]:
     """Extract WAC-Na specific parameters"""
     sim = base_payload["simulation"]
-    perf = sim.get("performance", {})
-    mass_bal = sim.get("mass_balance", {})
-    econ = sim.get("economics", {})
 
     # Check for breakthrough data file
     artifact_dir = Path(base_payload.get("artifact_dir", ""))
@@ -220,21 +371,21 @@ def _wac_na_parameters(base_payload: Dict[str, Any]) -> Dict[str, Any]:
 
     return {
         # Performance metrics
-        "service_volume_bv": perf.get("service_bv_to_target", 0),
-        "service_hours": perf.get("service_hours", 0),
-        "effluent_hardness": perf.get("effluent_hardness_mg_l_caco3", 0),
-        "effluent_alkalinity": perf.get("effluent_alkalinity_mg_l_caco3", 0),
-        "capacity_utilization": perf.get("capacity_utilization_percent", 0),
+        "service_volume_bv": safe_extract(sim, "performance.service_bv_to_target", None),
+        "service_hours": safe_extract(sim, "performance.service_hours", None),
+        "effluent_hardness": safe_extract(sim, "performance.effluent_hardness_mg_l_caco3", None),
+        "effluent_alkalinity": safe_extract(sim, "performance.effluent_alkalinity_mg_l_caco3", None),
+        "capacity_utilization": safe_extract(sim, "performance.capacity_utilization_percent", None),
 
         # Mass balance
-        "regenerant_kg_cycle": mass_bal.get("regenerant_kg_cycle", 0),
-        "waste_volume_m3": mass_bal.get("waste_m3_cycle", 0),
-        "hardness_removed_kg": mass_bal.get("hardness_removed_kg_caco3", 0),
+        "regenerant_kg_cycle": safe_extract(sim, "mass_balance.regenerant_kg_cycle", None),
+        "waste_volume_m3": safe_extract(sim, "mass_balance.waste_m3_cycle", None),
+        "hardness_removed_kg": safe_extract(sim, "mass_balance.hardness_removed_kg_caco3", None),
 
         # Economics (if available)
-        "capital_cost_usd": econ.get("capital_cost_usd", 0),
-        "opex_usd_year": econ.get("operating_cost_usd_year", 0),
-        "lcow_usd_m3": econ.get("lcow_usd_m3", 0),
+        "capital_cost_usd": safe_extract(sim, "economics.capital_cost_usd", None),
+        "opex_usd_year": safe_extract(sim, "economics.operating_cost_usd_year", None),
+        "lcow_usd_m3": safe_extract(sim, "economics.lcow_usd_m3", None),
 
         # WAC-specific
         "two_step_regeneration": True,  # WAC-Na uses two-step
@@ -258,9 +409,6 @@ register_report(ReportSpec(
 def _wac_h_parameters(base_payload: Dict[str, Any]) -> Dict[str, Any]:
     """Extract WAC-H specific parameters"""
     sim = base_payload["simulation"]
-    perf = sim.get("performance", {})
-    mass_bal = sim.get("mass_balance", {})
-    econ = sim.get("economics", {})
 
     # Check for breakthrough data file
     artifact_dir = Path(base_payload.get("artifact_dir", ""))
@@ -268,21 +416,21 @@ def _wac_h_parameters(base_payload: Dict[str, Any]) -> Dict[str, Any]:
 
     return {
         # Performance metrics
-        "service_volume_bv": perf.get("service_bv_to_target", 0),
-        "service_hours": perf.get("service_hours", 0),
-        "effluent_hardness": perf.get("effluent_hardness_mg_l_caco3", 0),
-        "effluent_alkalinity": perf.get("effluent_alkalinity_mg_l_caco3", 0),
-        "capacity_utilization": perf.get("capacity_utilization_percent", 0),
+        "service_volume_bv": safe_extract(sim, "performance.service_bv_to_target", None),
+        "service_hours": safe_extract(sim, "performance.service_hours", None),
+        "effluent_hardness": safe_extract(sim, "performance.effluent_hardness_mg_l_caco3", None),
+        "effluent_alkalinity": safe_extract(sim, "performance.effluent_alkalinity_mg_l_caco3", None),
+        "capacity_utilization": safe_extract(sim, "performance.capacity_utilization_percent", None),
 
         # Mass balance
-        "regenerant_kg_cycle": mass_bal.get("regenerant_kg_cycle", 0),
-        "waste_volume_m3": mass_bal.get("waste_m3_cycle", 0),
-        "hardness_removed_kg": mass_bal.get("hardness_removed_kg_caco3", 0),
+        "regenerant_kg_cycle": safe_extract(sim, "mass_balance.regenerant_kg_cycle", None),
+        "waste_volume_m3": safe_extract(sim, "mass_balance.waste_m3_cycle", None),
+        "hardness_removed_kg": safe_extract(sim, "mass_balance.hardness_removed_kg_caco3", None),
 
         # Economics (if available)
-        "capital_cost_usd": econ.get("capital_cost_usd", 0),
-        "opex_usd_year": econ.get("operating_cost_usd_year", 0),
-        "lcow_usd_m3": econ.get("lcow_usd_m3", 0),
+        "capital_cost_usd": safe_extract(sim, "economics.capital_cost_usd", None),
+        "opex_usd_year": safe_extract(sim, "economics.operating_cost_usd_year", None),
+        "lcow_usd_m3": safe_extract(sim, "economics.lcow_usd_m3", None),
 
         # WAC-specific
         "co2_generation": True,         # H-form generates CO2
@@ -442,19 +590,29 @@ async def convert_to_html(notebook_path: Path, html_path: Path) -> Optional[Path
         with open(notebook_path, 'r', encoding='utf-8') as f:
             nb = nbformat.read(f, as_version=4)
 
-        # Configure HTML exporter
-        html_exporter = HTMLExporter()
-        html_exporter.template_name = 'lab'  # Modern template
+        # Configure HTML exporter with proper settings to hide code
+        html_exporter = HTMLExporter(
+            exclude_input=True,  # Hide all code inputs
+            exclude_input_prompt=True,
+            exclude_output_prompt=True,
+            template_name='lab'  # Modern template
+        )
 
-        # Tags to exclude from HTML
-        html_exporter.exclude_input_prompt = True
-        html_exporter.exclude_output_prompt = True
-        html_exporter.exclude_cell_tags = {'parameters', 'hide-cell'}
+        # Configure preprocessors to remove tagged cells
+        from nbconvert.preprocessors import TagRemovePreprocessor
+        tag_remover = TagRemovePreprocessor(
+            remove_input_tags={'hide-input', 'hide-cell', 'parameters'},
+            remove_all_outputs_tags={'hide-output'},
+            remove_cell_tags={'hide-cell', 'parameters'}
+        )
+
+        # Process notebook to remove tagged cells/inputs
+        nb, _ = tag_remover.preprocess(nb, {})
 
         # Convert to HTML
         (body, resources) = html_exporter.from_notebook_node(nb)
 
-        # Add custom CSS for professional styling
+        # Add custom CSS for professional styling and left-aligned equations
         custom_css = """
 <style>
     .jp-RenderedHTMLCommon table {
@@ -469,8 +627,22 @@ async def convert_to_html(notebook_path: Path, html_path: Path) -> Optional[Path
     .jp-RenderedHTMLCommon th {
         background-color: #f2f2f2;
     }
+    /* Left-align all math displays */
     .MathJax_Display {
-        margin: 1em 0;
+        text-align: left !important;
+        margin: 1em 0 !important;
+    }
+    /* Override any centered math */
+    .jp-OutputArea-output .MathJax_Display {
+        text-align: left !important;
+    }
+    /* Ensure consistent left alignment */
+    mjx-container[jax="CHTML"][display="true"] {
+        text-align: left !important;
+    }
+    /* For KaTeX if used */
+    .katex-display {
+        text-align: left !important;
     }
 </style>
 """
