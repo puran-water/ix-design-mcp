@@ -38,6 +38,13 @@ try:
     OPTIMIZED_AVAILABLE = True
 except ImportError:
     OPTIMIZED_AVAILABLE = False
+
+# Import enhanced generator if available
+try:
+    from tools.enhanced_phreeqc_generator import EnhancedPHREEQCGenerator
+    ENHANCED_GENERATOR_AVAILABLE = True
+except ImportError:
+    ENHANCED_GENERATOR_AVAILABLE = False
     
 from watertap_ix_transport.transport_core.direct_phreeqc_engine import DirectPhreeqcEngine
 
@@ -524,11 +531,23 @@ class _IXDirectPhreeqcSimulation:
                 'temperature_celsius': water.temperature_celsius
             }
             
-            exchange_species_block = helper.generate_enhanced_exchange_species(
-                'SAC', water_dict, water.temperature_celsius, capacity_factor,
-                enable_ionic_strength=CONFIG.ENABLE_IONIC_STRENGTH_CORRECTION,
-                enable_temperature=CONFIG.ENABLE_TEMPERATURE_CORRECTION
-            )
+            if ENHANCED_GENERATOR_AVAILABLE:
+                # Use enhanced generator with DVB-based selectivity
+                gen = EnhancedPHREEQCGenerator()
+                # Default to 8% DVB for standard SAC resins (can be made configurable)
+                dvb_percent = vessel.get('dvb_percent', 8)
+                exchange_species_block = gen.generate_exchange_species(
+                    'SAC',
+                    temperature_c=water.temperature_celsius,
+                    dvb_percent=dvb_percent,
+                    ions_present=['Ca', 'Mg', 'Na', 'K']  # Primary ions
+                )
+            else:
+                exchange_species_block = helper.generate_enhanced_exchange_species(
+                    'SAC', water_dict, water.temperature_celsius, capacity_factor,
+                    enable_ionic_strength=CONFIG.ENABLE_IONIC_STRENGTH_CORRECTION,
+                    enable_temperature=CONFIG.ENABLE_TEMPERATURE_CORRECTION
+                )
         else:
             exchange_species_block = "# Exchange species loaded from database"
         
