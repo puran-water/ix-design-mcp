@@ -19,6 +19,14 @@ if str(project_root) not in sys.path:
 from tools.core_config import CONFIG
 from tools.base_ix_simulation import BaseIXSimulation
 
+# Import enhanced generator if available
+try:
+    from tools.enhanced_phreeqc_generator import EnhancedPHREEQCGenerator
+    from tools.wac_enhanced_species import generate_wac_exchange_species
+    ENHANCED_GENERATOR_AVAILABLE = True
+except ImportError:
+    ENHANCED_GENERATOR_AVAILABLE = False
+
 logger = logging.getLogger(__name__)
 
 
@@ -95,16 +103,25 @@ def create_wac_na_phreeqc_input(
     
     # Generate enhanced exchange species if enabled
     exchange_species_block = ""
-    if enable_enhancements:
+    temperature_c = water_composition.get('temperature_celsius', 25)
+
+    if enable_enhancements and ENHANCED_GENERATOR_AVAILABLE:
+        # Use enhanced pH-dependent model
+        exchange_species_block = generate_wac_exchange_species(
+            resin_type='WAC_Na',
+            temperature_c=temperature_c,
+            enhanced_selectivity=True
+        )
+    elif enable_enhancements:
         # Use helper to generate enhanced exchange species
         if 'helper' not in locals():
             class TempIXHelper(BaseIXSimulation):
                 def run_simulation(self, input_data):
                     pass
             helper = TempIXHelper()
-        
+
         exchange_species_block = helper.generate_enhanced_exchange_species(
-            'WAC_Na', water_composition, water_composition.get('temperature_celsius', 25),
+            'WAC_Na', water_composition, temperature_c,
             capacity_factor,
             enable_ionic_strength=CONFIG.ENABLE_IONIC_STRENGTH_CORRECTION,
             enable_temperature=CONFIG.ENABLE_TEMPERATURE_CORRECTION
@@ -301,16 +318,25 @@ def create_wac_h_phreeqc_input(
     
     # Generate enhanced exchange species if enabled
     exchange_species_block = ""
-    if enable_enhancements:
+    temperature_c = water_composition.get('temperature_celsius', 25)
+
+    if enable_enhancements and ENHANCED_GENERATOR_AVAILABLE:
+        # Use enhanced pH-dependent model
+        exchange_species_block = generate_wac_exchange_species(
+            resin_type='WAC_H',
+            temperature_c=temperature_c,
+            enhanced_selectivity=True
+        )
+    elif enable_enhancements:
         # Use helper to generate enhanced exchange species
         if 'helper' not in locals():
             class TempIXHelper(BaseIXSimulation):
                 def run_simulation(self, input_data):
                     pass
             helper = TempIXHelper()
-        
+
         exchange_species_block = helper.generate_enhanced_exchange_species(
-            'WAC_H', water_composition, water_composition.get('temperature_celsius', 25),
+            'WAC_H', water_composition, temperature_c,
             capacity_factor,
             enable_ionic_strength=CONFIG.ENABLE_IONIC_STRENGTH_CORRECTION,
             enable_temperature=CONFIG.ENABLE_TEMPERATURE_CORRECTION
