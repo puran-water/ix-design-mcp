@@ -43,7 +43,7 @@ except ImportError:
 try:
     from tools.enhanced_phreeqc_generator import EnhancedPHREEQCGenerator
     ENHANCED_GENERATOR_AVAILABLE = True
-except ImportError:
+except ImportError as e:
     ENHANCED_GENERATOR_AVAILABLE = False
     
 from watertap_ix_transport.transport_core.direct_phreeqc_engine import DirectPhreeqcEngine
@@ -57,9 +57,15 @@ from .sac_configuration import (
 
 # Import centralized configuration
 from .core_config import CONFIG
-# Base class removed during cleanup - functionality integrated directly
+# Base class imported locally where needed to avoid scoping issues
 
 logger = logging.getLogger(__name__)
+
+# Log enhanced generator availability
+if ENHANCED_GENERATOR_AVAILABLE:
+    logger.info("Enhanced PHREEQC generator loaded successfully")
+else:
+    logger.warning("Enhanced PHREEQC generator not available")
 
 
 class SACPerformanceMetrics(BaseModel):
@@ -388,7 +394,7 @@ class _IXDirectPhreeqcSimulation:
         vessel_config: Dict[str, Any],
         max_bv: int = 100,
         cells: int = 10,
-        enable_enhancements: bool = False,  # Disabled - PHREEQC handles exchange species natively
+        enable_enhancements: bool = True,  # Enable to use enhanced selectivity database
         capacity_factor: float = 1.0
     ) -> Tuple[np.ndarray, Dict[str, np.ndarray]]:
         """
@@ -431,10 +437,14 @@ class _IXDirectPhreeqcSimulation:
             
             # Use helper for MTZ calculation
             if 'helper' not in locals():
-                class TempIXHelper(BaseIXSimulation):
-                    def run_simulation(self, input_data):
-                        pass
-                helper = TempIXHelper()
+                try:
+                    from .base_ix_simulation import BaseIXSimulation as BaseIX
+                    class TempIXHelper(BaseIX):
+                        def run_simulation(self, input_data):
+                            pass
+                    helper = TempIXHelper()
+                except ImportError:
+                    helper = None
             
             # Calculate feed concentration in eq/L
             # CORRECTED: Resin capacity is per liter of BED VOLUME
@@ -468,11 +478,15 @@ class _IXDirectPhreeqcSimulation:
         # Apply capacity degradation if enabled
         if enable_enhancements and capacity_factor < 1.0:
             # Create a temporary helper instance (doesn't need to be a full simulation)
-            class TempIXHelper(BaseIXSimulation):
-                def run_simulation(self, input_data):
-                    pass  # Not needed for utility methods
-            
-            helper = TempIXHelper()
+            try:
+                from .base_ix_simulation import BaseIXSimulation as BaseIX
+                class TempIXHelper(BaseIX):
+                    def run_simulation(self, input_data):
+                        pass  # Not needed for utility methods
+
+                helper = TempIXHelper()
+            except ImportError:
+                helper = None
             effective_capacity = helper.apply_capacity_degradation(
                 resin_capacity_eq_L, capacity_factor
             )
@@ -512,11 +526,14 @@ class _IXDirectPhreeqcSimulation:
         if enable_enhancements:
             # Use helper to generate enhanced exchange species
             if 'helper' not in locals():
-                from .base_ix_simulation import BaseIXSimulation
-                class TempIXHelper(BaseIXSimulation):
-                    def run_simulation(self, input_data):
-                        pass
-                helper = TempIXHelper()
+                try:
+                    from .base_ix_simulation import BaseIXSimulation as BaseIX
+                    class TempIXHelper(BaseIX):
+                        def run_simulation(self, input_data):
+                            pass
+                    helper = TempIXHelper()
+                except ImportError:
+                    helper = None
             
             # Convert water composition to dict format
             water_dict = {
@@ -535,7 +552,8 @@ class _IXDirectPhreeqcSimulation:
                 # Use enhanced generator with DVB-based selectivity
                 gen = EnhancedPHREEQCGenerator()
                 # Default to 8% DVB for standard SAC resins (can be made configurable)
-                dvb_percent = vessel.get('dvb_percent', 8)
+                dvb_percent = vessel_config.get('dvb_percent', 8)
+                logger.info(f"Using enhanced generator with DVB={dvb_percent}%")
                 exchange_species_block = gen.generate_exchange_species(
                     'SAC',
                     temperature_c=water.temperature_celsius,
