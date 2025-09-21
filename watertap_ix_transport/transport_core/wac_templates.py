@@ -181,7 +181,7 @@ SOLUTION 1-{cells} Initial column water
 # WAC exchanger in Na form
 EXCHANGE 1-{cells}
     X         {exchange_per_kg_water}
-    -equilibrate with solution 1-{cells}
+    -equilibrate solution 1-{cells}
 
 # Transport simulation
 TRANSPORT
@@ -403,7 +403,7 @@ SOLUTION 1-{cells} Initial column water
 
 # WAC exchanger - initialize as H-form via equilibration
 EXCHANGE 1-{cells}
-    -equilibrate with solution 1-{cells}
+    -equilibrate solution 1-{cells}
     X         {exchange_per_kg_water}
 
 # Transport simulation
@@ -593,7 +593,7 @@ SURFACE {i}
     -sites_units absolute
     -no_edl
     Wac_s {sites_per_cell} 1 1
-    -equilibrate with solution {i}"""
+    -equilibrate solution {i}"""
     
     phreeqc_input += f"""
 
