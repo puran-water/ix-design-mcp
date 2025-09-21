@@ -50,8 +50,11 @@ def generate_wac_exchange_species(
     # dpKa/dT ≈ -0.017 per °C for carboxylic acids
     pka_adjusted = pka - 0.017 * (temperature_c - 25.0)
 
-    # Build EXCHANGE_SPECIES block
+    # Build EXCHANGE_MASTER_SPECIES and EXCHANGE_SPECIES blocks
     exchange_species = """# Enhanced WAC Exchange Species with pH-Dependent Capacity
+EXCHANGE_MASTER_SPECIES
+    X X-
+
 EXCHANGE_SPECIES
     # Identity reaction for master species (required)
     X- = X-

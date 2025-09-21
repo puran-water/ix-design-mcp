@@ -101,12 +101,17 @@ class EnhancedPHREEQCGenerator:
         resin_data = self.selectivity_db["resin_types"][resin_key]
         species_data = resin_data.get("exchange_species", {})
 
-        # Build EXCHANGE_SPECIES block
+        # Build EXCHANGE_MASTER_SPECIES and EXCHANGE_SPECIES blocks
         lines = []
         lines.append(f"# Exchange species for {resin_data.get('description', resin_key)}")
         lines.append(f"# Temperature: {temperature_c:.1f}°C")
         if dvb_percent and resin_type == "SAC":
             lines.append(f"# DVB crosslinking: {dvb_percent}%")
+
+        # Add EXCHANGE_MASTER_SPECIES first (required for custom exchange definitions)
+        lines.append("EXCHANGE_MASTER_SPECIES")
+        lines.append("    X X-")
+        lines.append("")
         lines.append("EXCHANGE_SPECIES")
 
         # Add identity reaction for master species
