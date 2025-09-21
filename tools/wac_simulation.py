@@ -741,7 +741,7 @@ SURFACE 1 Current resin state
     (Rcoo)2Ca {ca_frac * total_sites / 2} {volume_L} 1.0
     (Rcoo)2Mg {mg_frac * total_sites / 2} {volume_L} 1.0
     RcooNa    {na_frac * total_sites} {volume_L} 1.0
-    -equilibrate with solution 1
+    -equilibrate solution 1
     -no_edl
 
 PRINT
