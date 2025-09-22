@@ -101,12 +101,13 @@ logger.info(f"Imported sac_configuration in {time.time() - import_start:.2f}s")
 from tools.sac_simulation import simulate_sac_phreeqc, SACSimulationInput
 logger.info(f"Imported sac_simulation in {time.time() - import_start:.2f}s total")
 
-# Import WAC tools
+# Import WAC tools (now using SURFACE complexation model for pH-dependent capacity)
 from tools.wac_configuration import configure_wac_vessel, WACConfigurationInput
 logger.info(f"Imported wac_configuration in {time.time() - import_start:.2f}s total")
 
 from tools.wac_simulation import simulate_wac_system, WACSimulationInput
 logger.info(f"Imported wac_simulation in {time.time() - import_start:.2f}s total")
+logger.info("WAC tools now use SURFACE complexation model for correct pH-dependent capacity")
 
 logger.info(f"All IX tools imported in {time.time() - import_start:.2f}s total")
 

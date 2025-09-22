@@ -15,7 +15,8 @@ import logging
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from tools.core_config import CONFIG
-from tools.wac_enhanced_species import generate_wac_exchange_species
+# WAC now uses SURFACE complexation model - see wac_surface_builder.py
+# from tools.wac_enhanced_species import generate_wac_exchange_species  # REMOVED
 
 logger = logging.getLogger(__name__)
 
@@ -79,12 +80,12 @@ class EnhancedPHREEQCGenerator:
         Returns:
             Complete EXCHANGE_SPECIES block as string
         """
-        # For WAC resins, optionally use the enhanced model
+        # For WAC resins, use SURFACE complexation model instead
         if resin_type.startswith("WAC") and use_wac_enhanced:
-            return generate_wac_exchange_species(
-                resin_type=resin_type,
-                temperature_c=temperature_c,
-                enhanced_selectivity=True
+            # WAC now uses SURFACE complexation - see wac_surface_builder.py
+            raise NotImplementedError(
+                "WAC resins now use SURFACE complexation model. "
+                "Use tools.wac_surface_builder instead of EXCHANGE_SPECIES."
             )
 
         # Get resin data from database
