@@ -120,6 +120,21 @@ The model correctly predicts:
 - CO2 generation (H-form)
 - Competitive ion exchange between deprotonated sites
 
+## Bug Fixes - September 2025
+
+### Critical Cl Charge Syntax Bug
+**Issue**: WAC simulations were failing with "Concentration data error for cl in solution input"
+**Root Cause**: Invalid PHREEQC syntax `Cl charge` without numeric value
+**Fix Applied**:
+1. Changed `Cl charge` to `Cl 0 charge` for Na-form WAC
+2. Added `units mg/L` declaration to SOLUTION blocks
+3. Updated pH initialization: Na-form uses pH 7.0, H-form uses feed pH
+
+**Results After Fix**:
+- WAC Na-form: ~92.8 BV breakthrough (previously 0 BV)
+- Proper pH-dependent capacity following Henderson-Hasselbalch equation
+- No PHREEQC syntax errors
+
 ## References
 1. PHREEQC Manual - SURFACE complexation modeling
 2. Henderson, L.J. (1908). "The theory of neutrality regulation"

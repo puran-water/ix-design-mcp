@@ -30,7 +30,8 @@ def build_wac_surface_template(
     porosity: float = 0.4,
     flow_rate_m3_hr: float = 0.1,
     max_bv: int = 300,
-    database_path: str = None
+    database_path: str = None,
+    resin_form: str = "Na"  # "Na" for sodium form, "H" for hydrogen form
 ) -> str:
     """
     Build SURFACE-based WAC template with correct acid-base chemistry.
@@ -131,13 +132,27 @@ SOLUTION 0 Feed water
     S(6)      {water_composition.get('so4_mg_l', 0)} as SO4
     N(5)      {water_composition.get('no3_mg_l', 0)} as NO3
     water     1 kg
+"""
 
-# Initial column solution (acidic to protonate sites initially)
+    # Build initial column solution based on resin form
+    if resin_form == "Na":
+        # Na-form: neutral pH with Na-loaded resin
+        initial_ph = 7.0
+        na_line = "    Na        500  # mg/L - represents Na-loaded resin\n"
+        cl_line = "    Cl        0 charge  # Use 0 to auto-balance\n"
+    else:
+        # H-form: use feed pH or slightly acidic
+        initial_ph = water_composition.get('pH', 5.5)
+        na_line = ""
+        cl_line = "    Cl        1 charge\n"
+
+    phreeqc_input += f"""
+# Initial column solution - {resin_form} form
 SOLUTION 1-{cells} Initial column water
+    units     mg/L
     temp      {water_composition.get('temperature_celsius', 25)}
-    pH        3.0  # Start with protonated sites (RCOOH form)
-    Cl        1 charge
-    water     {water_per_cell_kg} kg
+    pH        {initial_ph}
+{na_line}{cl_line}    water     {water_per_cell_kg} kg
 """
 
     # Add SURFACE blocks for each cell
