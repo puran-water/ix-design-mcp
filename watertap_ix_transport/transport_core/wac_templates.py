@@ -88,7 +88,8 @@ def create_wac_na_phreeqc_input(
         porosity=0.4,
         flow_rate_m3_hr=flow_rate_m3_hr,
         max_bv=max_bv,
-        database_path=database_path
+        database_path=database_path,
+        resin_form="Na"  # Na-form WAC
     )
 
     return phreeqc_input
@@ -153,7 +154,8 @@ def create_wac_h_phreeqc_input(
         porosity=0.4,
         flow_rate_m3_hr=flow_rate_m3_hr,
         max_bv=max_bv,
-        database_path=database_path
+        database_path=database_path,
+        resin_form="H"  # H-form WAC
     )
 
     return phreeqc_input
