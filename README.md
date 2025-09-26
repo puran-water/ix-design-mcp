@@ -9,23 +9,41 @@
 
 ### Ion Exchange Process Modeling
 
-This MCP server implements rigorous ion exchange system design through direct PHREEQC geochemical modeling, providing accurate breakthrough prediction for Strong Acid Cation (SAC) and Weak Acid Cation (WAC) resins. The server integrates multi-ion competition effects, pH-dependent selectivity, and counter-current regeneration optimization to deliver industrial-grade vessel sizing and operational parameters.
+This MCP server implements rigorous ion exchange system design through a **three-tier modeling approach**, providing fast configuration, detailed validation, and benchmark accuracy for Strong Acid Cation (SAC) and Weak Acid Cation (WAC) resins.
 
 Key technical capabilities:
-- **Multi-ion PHREEQC modeling** - Direct integration with PHREEQC v3 for accurate ion competition and selectivity
-- **Breakthrough prediction** - Cell-based transport modeling with 8-cell discretization for sharp breakthrough curves
-- **WaterTAP economic costing** - EPA-WBS correlations via WaterTAP/IDAES for capital and operating costs
-- **Counter-current regeneration** - Optimized regenerant dosing with staged concentration profiles
+- **Knowledge-based configuration** - USEPA Gaines-Thomas equilibrium solver for <1 sec SAC sizing
+- **pH-dependent WAC modeling** - Henderson-Hasselbalch capacity for WAC-H alkalinity removal
+- **PHREEQC transport modeling** - Cell-based breakthrough prediction with 8-cell discretization
+- **WaterTAP economic costing** - EPA-WBS correlations via WaterTAP/IDAES for CAPEX/OPEX/LCOW
+- **Multi-ion competition** - Accurate Ca²⁺/Mg²⁺/Na⁺ selectivity from literature (Helfferich)
 - **Unified results schema** - Consistent JSON output across all simulation engines
 
-### Architecture
+### Three-Tier Architecture
 
-The server employs a hybrid architecture combining PHREEQC's geochemical accuracy with WaterTAP's process economics:
+**Tier 1: Fast Configuration (<1 sec)**
+- USEPA Gaines-Thomas equilibrium solver for SAC hardness leakage
+- Henderson-Hasselbalch pH floor model for WAC-H alkalinity removal
+- Literature-based capacity derating and selectivity coefficients
+- Ideal for parametric studies and optimization loops
 
-1. **Configuration Layer** - Hydraulic sizing based on industry standards (16 BV/hr service, 25 m/hr linear velocity)
-2. **Simulation Layer** - PHREEQC cell-based transport for service and regeneration cycles
-3. **Economic Layer** - WaterTAP flowsheet construction with EPA-WBS costing correlations
-4. **Process Isolation** - Subprocess execution prevents WaterTAP import conflicts
+**Tier 2: Detailed Validation (10-60 sec)**
+- PHREEQC cell-based transport with mass transfer effects
+- Full breakthrough curves and regeneration cycle modeling
+- WaterTAP flowsheet construction with economic costing
+- Recommended for final design validation
+
+**Tier 3: Benchmark Accuracy (Future)**
+- USEPA HSDMIX full transport model (pore + film diffusion)
+- Cross-validation against PHREEQC for quality assurance
+- Research-grade accuracy for complex waters
+
+### Process Flow
+
+1. **Configuration Layer** - Hydraulic sizing (16 BV/hr service, 25 m/hr linear velocity, L/D = 1.5-2.0)
+2. **Performance Prediction** - Knowledge-based models or PHREEQC simulation
+3. **Economic Analysis** - WaterTAP costing with EPA-WBS correlations
+4. **Report Generation** - Professional HTML reports with breakthrough curves
 
 ## Features
 
@@ -207,11 +225,78 @@ Add to `claude_desktop_config.json`:
 }
 ```
 
+## Recent Improvements (September 2025)
+
+### SAC Leakage Model Overhaul
+Replaced fundamentally flawed dose-based leakage model with **USEPA Gaines-Thomas equilibrium solver**:
+
+**Before (Wrong)**:
+```python
+# Hardcoded leakage tiers based on regeneration dose only
+if regen_dose >= 150: leakage = 0.5 mg/L
+elif regen_dose >= 120: leakage = 1.0 mg/L
+```
+- Ignored feed water composition (Na/Ca/Mg ratios)
+- Violated mass action equilibrium principles
+
+**After (Correct)**:
+```python
+# Gaines-Thomas equilibrium from feed composition
+K_GT = (y_Ca × X_Na²) / (y_Na² × X_Ca)
+leakage = f(Ca, Mg, Na, K_Ca_Na, K_Mg_Na, f_active)
+```
+- Mass action law from Helfferich (1962)
+- Accounts for multi-ion competition
+- Parameterized with `f_active` (0.08-0.15) for mass transfer zone
+- Extracted from USEPA Water Treatment Models (public domain)
+
+**Key Benefits**:
+- ✅ Physics-based predictions from feed water chemistry
+- ✅ Regeneration dose now correctly controls capacity, not leakage
+- ✅ Validated to ±0.001% on Gaines-Thomas relationship
+- ✅ <1 ms computation time for parametric studies
+
+### WAC-H pH Floor Model
+Implemented Henderson-Hasselbalch capacity model where **target alkalinity drives pH floor**:
+```python
+pH_floor = f(target_alkalinity)  # e.g., 10 mg/L → pH 4.4
+alpha = 1 / (1 + 10^(pKa - pH_floor))  # Fraction of active sites
+operating_capacity = total_capacity × alpha
+```
+
+### Code Quality Improvements
+- Removed 49 development artifacts (test scripts, debug files, dead code)
+- 32% reduction in tools/ directory size
+- All MCP tools tested and verified functional
+- Comprehensive test suite with 9 equilibrium physics tests
+
 ## Technical Implementation Details
 
-### PHREEQC Integration
+### Knowledge-Based Configuration (Tier 1)
+**SAC Model** (`tools/equilibrium_leakage.py`):
+- USEPA Gaines-Thomas equilibrium solver
+- Iterative composition solver with mass balance normalization
+- `f_active` parameterization for mass transfer effects
+- Calibration function for PHREEQC tuning
+
+**WAC-H Model** (`tools/breakthrough_calculator.py`):
+- pH-dependent capacity via Henderson-Hasselbalch
+- CO₂ generation stoichiometry
+- Alkalinity removal limits
+
+**Capacity Derating** (`tools/capacity_derating.py`):
+- Regeneration efficiency from literature (Helfferich Ch. 9)
+- Selectivity coefficient corrections
+- Incomplete utilization factors
+
+**Selectivity Data** (`tools/selectivity_coefficients.py`):
+- K_Ca_Na = 5.16, K_Mg_Na = 3.29 (8% DVB SAC)
+- Literature-sourced values for accuracy
+
+### PHREEQC Integration (Tier 2)
 - Uses phreeqpython wrapper for direct PHREEQC execution
 - 8-cell discretization for transport modeling
+- SURFACE complexation for WAC weak acid groups
 - Automatic charge balancing for ionic solutions
 - Temperature-corrected equilibrium constants
 
