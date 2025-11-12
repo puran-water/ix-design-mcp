@@ -147,6 +147,7 @@ tests/*.py
 !tests/test_pitzer_database.py
 !tests/test_charge_balance.py
 !tests/test_hydraulics.py
+!tests/test_fallback_selectivity.py
 tests/debug/
 tests/regeneration_diagnostics/
 tests/fixtures/
