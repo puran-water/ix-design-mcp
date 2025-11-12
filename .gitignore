@@ -108,7 +108,6 @@ test_*.py
 !tests/test_phase4_mcp_simulation.py
 *.png
 *.json
-!data/resin_parameters.json
 !examples/sample_request.json
 
 # Internal documentation
@@ -189,6 +188,7 @@ databases/*.dat
 databases/*.phr
 !databases/.gitkeep
 !databases/resin_parameters.json
+!databases/resin_selectivity.json
 
 # Examples to exclude
 examples/ix_example.py
