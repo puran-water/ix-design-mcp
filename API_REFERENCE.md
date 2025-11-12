@@ -57,7 +57,7 @@ Unified simulation with PHREEQC chemistry and WaterTAP economics.
   "schema_version": "1.0.0",
   "resin_type": "SAC" | "WAC_Na" | "WAC_H",
   "water": {
-    "flow_m3h": float,
+    "flow_m3_hr": float,
     "temperature_c": float,
     "pH": float,
     "ions_mg_l": {

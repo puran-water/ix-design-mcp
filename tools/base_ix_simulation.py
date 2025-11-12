@@ -91,7 +91,7 @@ class BaseIXSimulation(ABC):
         logger.info(f"  - PHREEQC database: {phreeqc_db}")
         
         try:
-            engine = DirectPhreeqcEngine(phreeqc_path=str(phreeqc_exe), keep_temp_files=False)
+            engine = DirectPhreeqcEngine(phreeqc_path=str(phreeqc_exe))
             # Verify the engine has a valid database path
             if not engine.default_database:
                 logger.error("Engine created but has no database path")
@@ -102,7 +102,7 @@ class BaseIXSimulation(ABC):
             logger.warning(f"Failed to initialize PHREEQC at {phreeqc_exe}: {e}")
             # Try without specifying path (will search system)
             try:
-                engine = DirectPhreeqcEngine(keep_temp_files=False)
+                engine = DirectPhreeqcEngine()
                 # Verify the engine has a valid database path
                 if not engine.default_database:
                     logger.error("Engine created but has no database path")
@@ -116,7 +116,7 @@ class BaseIXSimulation(ABC):
                 env_phreeqc = os.environ.get('PHREEQC_EXE')
                 if env_phreeqc and env_phreeqc != str(phreeqc_exe):
                     logger.info(f"Trying PHREEQC_EXE from environment: {env_phreeqc}")
-                    engine = DirectPhreeqcEngine(phreeqc_path=env_phreeqc, keep_temp_files=False)
+                    engine = DirectPhreeqcEngine(phreeqc_path=env_phreeqc)
                     # Verify the engine has a valid database path
                     if not engine.default_database:
                         logger.error("Engine created but has no database path")
@@ -164,42 +164,86 @@ class BaseIXSimulation(ABC):
     def _extract_breakthrough_data_filtered(self, selected_output: str) -> Dict[str, np.ndarray]:
         """
         Extract breakthrough data with equilibration filtering.
-        
-        Filters out initial equilibration rows (step <= 0) to avoid false
-        breakthrough detection from initial conditions.
+
+        Modified to preserve step 0 (initial equilibration) for diagnostics
+        while still filtering out invalid steps (step < 0).
         Uses the engine's parser which properly handles header stripping.
         """
         # Use engine's parser which handles header stripping and species mapping
         parsed_data = self.engine.parse_selected_output(selected_output)
-        
+
         if not parsed_data:
+            logger.warning("No data returned from PHREEQC - likely convergence failure")
             return {}
-        
-        # Filter equilibration rows (step == -99 or step <= 0)
+
+        # Filter invalid rows but KEEP step 0 for initial state
         filtered_rows = []
+        has_transport_steps = False
         for row in parsed_data:
             # Check for step column (engine parser strips headers)
             step_value = row.get('step', row.get('Step', 0))
-            if step_value > 0:
+            if step_value >= 0:  # Changed from > 0 to >= 0
                 filtered_rows.append(row)
-        
+                if step_value > 0:
+                    has_transport_steps = True
+
         if not filtered_rows:
-            logger.warning("No valid transport steps found after filtering")
+            logger.error("No valid steps found - PHREEQC simulation failed completely")
             return {}
-        
-        # Convert list of dicts to dict of numpy arrays
-        data = {}
+
+        if not has_transport_steps:
+            logger.warning("Only equilibration step found (step=0) - transport did not progress")
+            logger.warning("This typically indicates pH crash or convergence failure")
+            logger.warning("Check PHREEQC temp files for convergence errors")
+            # Still return the equilibration data for diagnostics
+
+        def _safe_float(value: Any) -> float:
+            """Best-effort conversion to float with NaN fallback."""
+            if value is None:
+                return float('nan')
+            if isinstance(value, (int, float)):
+                return float(value)
+            if isinstance(value, str):
+                stripped = value.strip()
+                if stripped == "" or stripped.lower() in {"nan", "none"}:
+                    return float('nan')
+                try:
+                    return float(stripped)
+                except ValueError:
+                    return float('nan')
+            return float('nan')
+
+        # Convert list of dicts to dict of numpy arrays, keeping floats when possible
+        data: Dict[str, np.ndarray] = {}
         for key in filtered_rows[0].keys():
-            try:
-                # Try to convert to numeric array
-                values = [float(row[key]) for row in filtered_rows]
-                data[key] = np.array(values)
-            except (ValueError, TypeError):
-                # Keep as string array if not numeric
-                values = [row[key] for row in filtered_rows]
-                data[key] = np.array(values)
-        
-        logger.info(f"Filtered equilibration: {len(parsed_data)} rows -> {len(filtered_rows)} rows")
+            numeric_values = [_safe_float(row.get(key)) for row in filtered_rows]
+
+            # Determine if the column can be treated as numeric (any non-NaN values)
+            has_numeric = any(not np.isnan(val) for val in numeric_values)
+            if has_numeric:
+                data[key] = np.array(numeric_values, dtype=float)
+            else:
+                # Fall back to string representations for non-numeric columns
+                data[key] = np.array([
+                    "" if row.get(key) is None else str(row.get(key))
+                    for row in filtered_rows
+                ])
+
+        # Drop rows where step could not be parsed (NaN) to avoid downstream issues
+        step_column = data.get('step', data.get('Step'))
+        if step_column is not None:
+            valid_mask = ~np.isnan(step_column)
+            if not np.all(valid_mask):
+                for key in list(data.keys()):
+                    if data[key].shape == step_column.shape:
+                        data[key] = data[key][valid_mask]
+
+        logger.info(f"Filtered data: {len(parsed_data)} total rows -> {len(filtered_rows)} valid rows")
+        if has_transport_steps:
+            logger.info(f"Transport steps found: {len([r for r in filtered_rows if r.get('step', 0) > 0])}")
+        else:
+            logger.warning("No transport steps - only equilibration data available")
+
         return data
     
     def _validate_water_composition(self, water_composition: Dict[str, float]) -> bool:
@@ -271,9 +315,18 @@ class BaseIXSimulation(ABC):
         if hardness is not None:
             # Find rapid change points (derivative)
             if len(hardness) > 2:
-                d_hardness = np.diff(hardness)
-                rapid_change = np.where(np.abs(d_hardness) > np.std(d_hardness))[0]
-                key_indices.update(rapid_change)
+                # Filter out None values before computing diff
+                hardness_clean = np.array([x if x is not None else np.nan for x in hardness])
+                # Only compute diff on valid values
+                if not np.all(np.isnan(hardness_clean)):
+                    d_hardness = np.diff(hardness_clean)
+                    # Filter out NaN from diff result
+                    valid_diff = d_hardness[~np.isnan(d_hardness)]
+                    if len(valid_diff) > 0:
+                        std_diff = np.std(valid_diff)
+                        if std_diff > 0:
+                            rapid_change = np.where(np.abs(d_hardness) > std_diff)[0]
+                            key_indices.update(rapid_change)
         
         # Smart sampling: higher density near key points
         sampled_indices = list(key_indices)
@@ -310,21 +363,37 @@ class BaseIXSimulation(ABC):
         
         Common breakthrough detection logic with linear interpolation.
         """
-        # Find where concentration exceeds target
-        idx = np.where(concentration_array > target)[0]
+        # Find where concentration exceeds target (excluding None/NaN values)
+        # Convert to numeric array, replacing None with NaN
+        try:
+            numeric_array = np.array([float(x) if x is not None else np.nan for x in concentration_array])
+        except (TypeError, ValueError):
+            # If conversion fails, return None
+            return None
+
+        # Filter out NaN values
+        valid_mask = ~np.isnan(numeric_array)
+        if not np.any(valid_mask):
+            # No valid data points
+            return None
+
+        valid_concentrations = numeric_array[valid_mask]
+        valid_bv = bv_array[valid_mask]
+
+        idx = np.where(valid_concentrations > target)[0]
         if len(idx) > 0:
             i = idx[0]
             if i > 0:
                 # Linear interpolation for exact breakthrough point
                 bv_breakthrough = np.interp(
                     target,
-                    [concentration_array[i-1], concentration_array[i]],
-                    [bv_array[i-1], bv_array[i]]
+                    [valid_concentrations[i-1], valid_concentrations[i]],
+                    [valid_bv[i-1], valid_bv[i]]
                 )
                 return float(bv_breakthrough)
             else:
                 # Target exceeded from start
-                return float(bv_array[0])
+                return float(valid_bv[0])
         return None
     
     def _detect_breakthrough(
@@ -390,7 +459,7 @@ class BaseIXSimulation(ABC):
         self,
         loading_meq_L: float,
         capacity_eq_L: float,
-        buffer_factor: float = 1.2,
+        buffer_factor: float = 3.0,  # Increased from 1.2 to ensure we see breakthrough
         min_bv: int = 200
     ) -> int:
         """
@@ -450,9 +519,28 @@ class BaseIXSimulation(ABC):
         if len(bvs) == 0:
             logger.warning("No BV data found in breakthrough data")
             return 0
-        
+
+        # Filter out None values from bvs array
+        if not isinstance(bvs, np.ndarray):
+            bvs = np.array(bvs)
+
+        # Remove None/NaN values
+        valid_mask = np.array([x is not None and not (isinstance(x, float) and np.isnan(x)) for x in bvs])
+        if not np.any(valid_mask):
+            logger.warning("No valid BV data found in breakthrough data")
+            return 0
+
+        valid_indices = np.where(valid_mask)[0]
+        valid_bvs = bvs[valid_mask]
+
         # Use searchsorted to find index where breakthrough_bv would be inserted
-        idx = np.searchsorted(bvs, breakthrough_bv, side='left')
+        idx_in_valid = np.searchsorted(valid_bvs, breakthrough_bv, side='left')
+
+        # Map back to original index
+        if idx_in_valid < len(valid_indices):
+            idx = valid_indices[idx_in_valid]
+        else:
+            idx = valid_indices[-1] if len(valid_indices) > 0 else 0
         
         # Clamp to valid range [0, len-1]
         idx = min(max(0, idx), len(bvs) - 1)

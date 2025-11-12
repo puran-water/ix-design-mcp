@@ -465,6 +465,10 @@ def run_phreeqc_engine(
     else:
         logger.info("Regeneration mode set to staged_fixed (default)")
 
+    # Debug logging for ion aliasing
+    hco3_value = ions.get('HCO3_1-', ions.get('HCO3_-', 0))
+    logger.info(f"Ion aliasing: HCO3_1-={ions.get('HCO3_1-')}, HCO3_-={ions.get('HCO3_-')}, final={hco3_value}")
+
     legacy_input = {
         "water_analysis": {
             "flow_m3_hr": ix_input.water.flow_m3h,
@@ -472,9 +476,9 @@ def run_phreeqc_engine(
             "pH": ix_input.water.ph,
             "ca_mg_l": ions.get('Ca_2+', 0),
             "mg_mg_l": ions.get('Mg_2+', 0),
-            "na_mg_l": ions.get('Na_+', 0),
-            "cl_mg_l": ions.get('Cl_-', 0),
-            "hco3_mg_l": ions.get('HCO3_-', 0),
+            "na_mg_l": ions.get('Na_1+', ions.get('Na_+', 0)),  # Support both formats
+            "cl_mg_l": ions.get('Cl_1-', ions.get('Cl_-', 0)),  # Support both formats
+            "hco3_mg_l": hco3_value,  # Support both formats
             "so4_mg_l": ions.get('SO4_2-', 0)
         },
         "vessel_configuration": {

@@ -358,5 +358,6 @@ def validate_enhanced_generator():
     print("="*60)
 
 
+
 if __name__ == "__main__":
     validate_enhanced_generator()

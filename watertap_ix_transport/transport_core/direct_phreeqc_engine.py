@@ -74,6 +74,12 @@ class DirectPhreeqcEngine:
             raise RuntimeError("PHREEQC executable not found. Please install PHREEQC or provide path.")
         
         self.keep_temp_files = keep_temp_files
+
+        # Allow environment override for debugging
+        if os.environ.get('PHREEQC_KEEP_TEMP', '').lower() == 'true':
+            self.keep_temp_files = True
+            logger.info("PHREEQC_KEEP_TEMP=true detected, keeping temp files for debugging")
+
         self.temp_dirs = []  # Track temporary directories for cleanup
         logger.info(f"Using PHREEQC executable: {self.phreeqc_exe}")
         
@@ -318,18 +324,42 @@ class DirectPhreeqcEngine:
             )
         
         # Create temporary directory
-        temp_dir = tempfile.mkdtemp(prefix='phreeqc_')
+        # Check if we're running Windows PHREEQC from WSL
+        is_wsl_to_windows = (os.name == 'posix' and
+                              self.phreeqc_exe.lower().endswith('.exe'))
+
+        if is_wsl_to_windows:
+            # Use Windows temp directory that's accessible from both WSL and Windows
+            windows_temp = '/mnt/c/Users/hvksh/AppData/Local/Temp'
+            if not os.path.exists(windows_temp):
+                os.makedirs(windows_temp, exist_ok=True)
+            temp_dir = tempfile.mkdtemp(prefix='phreeqc_', dir=windows_temp)
+            logger.info(f"Using Windows-accessible temp dir: {temp_dir}")
+        else:
+            # Normal Linux temp directory
+            temp_dir = tempfile.mkdtemp(prefix='phreeqc_')
+
         self.temp_dirs.append(temp_dir)
+        logger.info(f"[PHASE4-DEBUG] Created temp dir: {temp_dir}")
         
         # Write input file with UTF-8 encoding
         input_path = os.path.join(temp_dir, 'input.pqi')
         with open(input_path, 'w', encoding='utf-8') as f:
             f.write(input_string)
+        logger.info(f"[PHASE4-DEBUG] Wrote input file: {input_path}, size: {len(input_string)} bytes")
+
+        # Debug output capability - save PHREEQC input if DEBUG_PHREEQC_INPUT is set
+        if os.environ.get('DEBUG_PHREEQC_INPUT'):
+            from datetime import datetime
+            from pathlib import Path as PathLib
+            debug_path = PathLib(f"debug_wac_h_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pqi")
+            debug_path.write_text(input_string)
+            logger.info(f"Saved PHREEQC input to {debug_path}")
         
         # Log input for debugging (first 20 lines only)
-        logger.debug("PHREEQC input (first 20 lines):")
-        for i, line in enumerate(input_string.split('\n')[:20]):
-            logger.debug(f"  {i+1:3d}: {line}")
+        logger.info("[PHASE4-DEBUG] PHREEQC input (first 30 lines):")
+        for i, line in enumerate(input_string.split('\n')[:30]):
+            logger.info(f"  {i+1:3d}: {line}")
         
         output_path = os.path.join(temp_dir, 'output.pqo')
         
@@ -345,7 +375,37 @@ class DirectPhreeqcEngine:
         try:
             # Prepare command based on OS
             # IMPORTANT: Never use os.chdir() - use cwd parameter instead
-            if os.name == 'nt' and self.phreeqc_exe.lower().endswith('.bat'):
+
+            # Convert paths for Windows PHREEQC running from WSL
+            if is_wsl_to_windows:
+                def wsl_to_windows_path(wsl_path):
+                    """Convert WSL path to Windows path."""
+                    if wsl_path.startswith('/mnt/c/'):
+                        # Convert /mnt/c/ to C:\
+                        return 'C:\\' + wsl_path[7:].replace('/', '\\')
+                    elif wsl_path.startswith('/mnt/'):
+                        # Handle other drives
+                        drive = wsl_path[5].upper()
+                        return f'{drive}:\\' + wsl_path[7:].replace('/', '\\')
+                    else:
+                        # Can't convert, return as-is and hope for the best
+                        logger.warning(f"Cannot convert WSL path to Windows: {wsl_path}")
+                        return wsl_path
+
+                # Convert all paths to Windows format
+                input_path_win = wsl_to_windows_path(input_path)
+                output_path_win = wsl_to_windows_path(output_path)
+                database_win = wsl_to_windows_path(database)
+
+                logger.debug(f"Path conversions:")
+                logger.debug(f"  Input: {input_path} -> {input_path_win}")
+                logger.debug(f"  Output: {output_path} -> {output_path_win}")
+                logger.debug(f"  Database: {database} -> {database_win}")
+
+                # Use Windows paths for the command
+                cmd = [self.phreeqc_exe, input_path_win, output_path_win, database_win]
+                shell = False
+            elif os.name == 'nt' and self.phreeqc_exe.lower().endswith('.bat'):
                 # Windows .bat file - use shell=True with proper quoting
                 cmd = f'"{self.phreeqc_exe}" "{input_path}" "{output_path}" "{database}"'
                 shell = True
@@ -371,11 +431,50 @@ class DirectPhreeqcEngine:
                 encoding='latin-1' if os.name == 'nt' else 'utf-8'  # Use latin-1 on Windows
             )
             
-            logger.debug(f"Return code: {result.returncode}")
+            logger.info(f"[PHASE4-DEBUG] PHREEQC return code: {result.returncode}")
             if result.stdout:
-                logger.debug(f"Stdout (first 200 chars): {result.stdout[:200]}")
+                logger.info(f"[PHASE4-DEBUG] Stdout (first 500 chars): {result.stdout[:500]}")
+
+            # Enhanced diagnostics for failures
+            if result.returncode != 0:
+                logger.error(f"PHREEQC failed with return code {result.returncode}")
+
+                # Save debug files for investigation
+                from pathlib import Path
+                import shutil
+                debug_dir = Path(f"debug_phreeqc_runs")
+                debug_dir.mkdir(exist_ok=True)
+
+                # Create unique debug folder
+                import datetime
+                timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+                run_debug_dir = debug_dir / f"failed_run_{timestamp}"
+                run_debug_dir.mkdir(exist_ok=True)
+
+                # Save input file
+                shutil.copy(input_path, run_debug_dir / "input.pqi")
+                logger.error(f"Saved failed input to {run_debug_dir / 'input.pqi'}")
+
+                # Save any PHREEQC log files
+                phreeqc_log = os.path.join(temp_dir, "phreeqc.log")
+                if os.path.exists(phreeqc_log):
+                    shutil.copy(phreeqc_log, run_debug_dir / "phreeqc.log")
+                    logger.error(f"Saved PHREEQC log to {run_debug_dir / 'phreeqc.log'}")
+
+                    # Read and log key error messages
+                    with open(phreeqc_log, 'r') as f:
+                        log_content = f.read()
+                        if "ERROR" in log_content or "CHARGE BALANCE" in log_content:
+                            error_lines = [l for l in log_content.split('\n')
+                                         if "ERROR" in l or "CHARGE" in l or "convergence" in l.lower()]
+                            logger.error("Key error messages from PHREEQC:")
+                            for line in error_lines[:10]:  # First 10 error lines
+                                logger.error(f"  {line}")
+
+                logger.error(f"Debug files saved to {run_debug_dir}")
+
             if result.stderr:
-                logger.debug(f"Stderr (first 200 chars): {result.stderr[:200]}")
+                logger.info(f"[PHASE4-DEBUG] Stderr: {result.stderr}")
             
             if result.returncode != 0:
                 logger.error(f"PHREEQC failed with return code {result.returncode}")
@@ -383,11 +482,11 @@ class DirectPhreeqcEngine:
                 raise RuntimeError(f"PHREEQC failed (code {result.returncode}): {result.stderr}")
             
             # Check what files were created
-            logger.debug(f"Files created in temp directory:")
+            logger.info(f"[PHASE4-DEBUG] Files created in temp directory {temp_dir}:")
             for f in os.listdir(temp_dir):
                 file_path = os.path.join(temp_dir, f)
                 if os.path.isfile(file_path):
-                    logger.debug(f"  - {f} ({os.path.getsize(file_path)} bytes)")
+                    logger.info(f"[PHASE4-DEBUG]   - {f} ({os.path.getsize(file_path)} bytes)")
             
             # Read output files with appropriate encoding
             encoding = 'latin-1' if os.name == 'nt' else 'utf-8'
@@ -404,9 +503,19 @@ class DirectPhreeqcEngine:
             if os.path.exists(selected_path):
                 with open(selected_path, 'r', encoding=encoding, errors='ignore') as f:
                     selected_string = f.read()
-                logger.debug(f"Selected output read: {len(selected_string)} characters")
+                logger.info(f"[PHASE4-DEBUG] Selected output read: {len(selected_string)} characters from {selected_path}")
             else:
-                logger.warning(f"Selected output file not found: {selected_path}")
+                logger.warning(f"[PHASE4-DEBUG] Selected output file not found: {selected_path}")
+                # Check for alternative selected output files
+                logger.info(f"[PHASE4-DEBUG] Looking for alternative .sel files:")
+                for f in os.listdir(temp_dir):
+                    if f.endswith('.sel'):
+                        alt_path = os.path.join(temp_dir, f)
+                        logger.info(f"[PHASE4-DEBUG] Found .sel file: {f}")
+                        with open(alt_path, 'r', encoding=encoding, errors='ignore') as sf:
+                            selected_string = sf.read()
+                            logger.info(f"[PHASE4-DEBUG] Using {f} as selected output ({len(selected_string)} chars)")
+                            break
             
             return output_string, selected_string
         

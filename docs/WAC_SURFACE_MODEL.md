@@ -75,10 +75,10 @@ SURFACE_SPECIES
 
     # Divalent cation binding (2:1 stoichiometry)
     2Wac_sO- + Ca+2 = (Wac_sO)2Ca
-        log_k 1.0
+        log_k 4.0
 
     2Wac_sO- + Mg+2 = (Wac_sO)2Mg
-        log_k 0.8
+        log_k 3.2
 
     # Monovalent cation binding
     Wac_sO- + Na+ = Wac_sONa
