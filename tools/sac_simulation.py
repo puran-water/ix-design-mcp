@@ -2215,7 +2215,18 @@ def _run_service_only_simulation(input_data: SACSimulationInput) -> SACSimulatio
     bed_volume_L = vessel.bed_volume_L  # From configuration tool
     bed_depth_m = vessel.bed_depth_m
     diameter_m = vessel.diameter_m
-    
+
+    # Check TDS and recommend Pitzer database if needed
+    tds_g_l = (
+        water.ca_mg_l + water.mg_mg_l + water.na_mg_l +
+        water.k_mg_l + water.nh4_mg_l +
+        getattr(water, 'cl_mg_l', 0) +
+        water.so4_mg_l + water.hco3_mg_l
+    ) / 1000.0
+    requires_pitzer, pitzer_msg = CONFIG.check_tds_for_pitzer(tds_g_l)
+    if requires_pitzer:
+        logger.warning(pitzer_msg)
+
     # Calculate porosity and resin parameters
     porosity = CONFIG.BED_POROSITY
     pore_volume_L = bed_volume_L * porosity

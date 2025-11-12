@@ -8,6 +8,7 @@ All physical constants, design parameters, and paths are defined here.
 from dataclasses import dataclass
 from pathlib import Path
 import os
+import sys
 from typing import Optional, Dict
 import logging
 
@@ -154,7 +155,11 @@ class CoreConfig:
     DEFAULT_TOLERANCE: float = 1e-6  # Numerical tolerance for convergence
     DEFAULT_CELLS: int = 8  # Number of cells for column discretization
     DEFAULT_MAX_BV: int = 200  # Maximum bed volumes to simulate
-    
+
+    # PHREEQC database selection
+    PHREEQC_DATABASE_NAME: str = "phreeqc.dat"  # Options: phreeqc.dat | pitzer.dat | sit.dat
+    HIGH_TDS_THRESHOLD_G_L: float = 10.0  # TDS threshold for Pitzer database recommendation
+
     # PHREEQC executable path (from environment or default)
     def get_phreeqc_exe(self) -> Path:
         """Get PHREEQC executable path from environment or use default."""
@@ -181,29 +186,58 @@ class CoreConfig:
         return Path(common_paths[0])
     
     # PHREEQC database path (from environment or default)
-    def get_phreeqc_database(self) -> Path:
-        """Get PHREEQC database path from environment or use default."""
+    def get_phreeqc_database(self, db_name: Optional[str] = None) -> Path:
+        """Get PHREEQC database path from environment or use default.
+
+        Args:
+            db_name: Database filename (e.g., 'phreeqc.dat', 'pitzer.dat').
+                     If None, uses PHREEQC_DATABASE_NAME from config.
+
+        Returns:
+            Path to the database file
+
+        Search order:
+            1. PHREEQC_DATABASE environment variable
+            2. Virtual environment site-packages/phreeqpython/database/
+            3. System PHREEQC installations
+        """
+        if db_name is None:
+            db_name = self.PHREEQC_DATABASE_NAME
+
+        # 1. Check environment variable
         env_path = os.getenv('PHREEQC_DATABASE')
         if env_path and os.path.exists(env_path):
             return Path(env_path)
-        
-        # Try common locations
-        common_paths = [
-            r"C:\Program Files\USGS\phreeqc-3.8.6-17100-x64\database\phreeqc.dat",
-            r"C:\Program Files\USGS\phreeqc-3.8.6-17096-x64\database\phreeqc.dat",
-            r"C:\Program Files\USGS\phreeqc\database\phreeqc.dat",
-            r"C:\Program Files (x86)\USGS\phreeqc\database\phreeqc.dat",
-            r"C:\phreeqc\database\phreeqc.dat",
-            "/usr/local/share/phreeqc/database/phreeqc.dat",
-            "/usr/share/phreeqc/database/phreeqc.dat",
+
+        # 2. Check virtual environment (phreeqpython package)
+        try:
+            import phreeqpython
+            phreeqpy_db = Path(phreeqpython.__file__).parent / "database" / db_name
+            if phreeqpy_db.exists():
+                logger.debug(f"Using PHREEQC database from phreeqpython: {phreeqpy_db}")
+                return phreeqpy_db
+        except ImportError:
+            pass
+
+        # 3. Try common system installation locations
+        common_dirs = [
+            r"C:\Program Files\USGS\phreeqc-3.8.6-17100-x64\database",
+            r"C:\Program Files\USGS\phreeqc-3.8.6-17096-x64\database",
+            r"C:\Program Files\USGS\phreeqc\database",
+            r"C:\Program Files (x86)\USGS\phreeqc\database",
+            r"C:\phreeqc\database",
+            "/usr/local/share/phreeqc/database",
+            "/usr/share/phreeqc/database",
         ]
-        
-        for path in common_paths:
-            if os.path.exists(path):
-                return Path(path)
-        
-        # Return first default if nothing found
-        return Path(common_paths[0])
+
+        for dir_path in common_dirs:
+            full_path = Path(dir_path) / db_name
+            if full_path.exists():
+                return full_path
+
+        # Return default path (may not exist - caller should handle)
+        logger.warning(f"Database {db_name} not found in standard locations")
+        return Path(common_dirs[0]) / db_name
     
     def get_equiv_weight(self, ion: str) -> float:
         """
@@ -273,15 +307,46 @@ class CoreConfig:
             'K_H': 2.0,      # K+ replacing H+ on resin (endothermic)
         }
     
-    def get_merged_database_path(self) -> Path:
-        """Get path to merged database, creating if needed"""
+    def check_tds_for_pitzer(self, tds_g_l: float) -> tuple[bool, str]:
+        """Check if water TDS requires Pitzer database.
+
+        Args:
+            tds_g_l: Total dissolved solids in g/L
+
+        Returns:
+            Tuple of (requires_pitzer: bool, message: str)
+        """
+        if tds_g_l > self.HIGH_TDS_THRESHOLD_G_L:
+            msg = (
+                f"High TDS detected ({tds_g_l:.1f} g/L > {self.HIGH_TDS_THRESHOLD_G_L} g/L). "
+                f"Recommend using Pitzer database for accurate activity coefficients. "
+                f"Set PHREEQC_DATABASE_NAME='pitzer.dat' in config or use get_phreeqc_database('pitzer.dat')"
+            )
+            return True, msg
+        return False, ""
+
+    def get_merged_database_path(self, db_name: Optional[str] = None) -> Path:
+        """Get path to merged database, creating if needed.
+
+        Args:
+            db_name: Base database to use (e.g., 'phreeqc.dat', 'pitzer.dat').
+                     If None, uses PHREEQC_DATABASE_NAME from config.
+
+        Returns:
+            Path to merged database file
+        """
+        if db_name is None:
+            db_name = self.PHREEQC_DATABASE_NAME
+
         project_root = get_project_root()
-        merged_path = project_root / "databases" / "phreeqc_merged.dat"
-        
+        # Create different merged files for different base databases
+        db_basename = db_name.replace('.dat', '')
+        merged_path = project_root / "databases" / f"{db_basename}_merged.dat"
+
         if not merged_path.exists():
-            logger.info("Creating merged PHREEQC database...")
-            setup_merged_database()
-        
+            logger.info(f"Creating merged PHREEQC database from {db_name}...")
+            setup_merged_database(db_name)
+
         return merged_path
 
 
@@ -290,34 +355,47 @@ CONFIG = CoreConfig()
 
 
 # Database setup functions
-def setup_merged_database():
-    """Create phreeqc_merged.dat with exchange reactions included"""
+def setup_merged_database(db_name: Optional[str] = None):
+    """Create merged PHREEQC database with exchange reactions included.
+
+    Args:
+        db_name: Base database filename (e.g., 'phreeqc.dat', 'pitzer.dat').
+                 If None, uses PHREEQC_DATABASE_NAME from config.
+
+    Returns:
+        Path to merged database file
+    """
+    if db_name is None:
+        db_name = CONFIG.PHREEQC_DATABASE_NAME
+
     project_root = get_project_root()
     db_dir = project_root / "databases"
     db_dir.mkdir(exist_ok=True)
-    
-    merged_path = db_dir / "phreeqc_merged.dat"
-    
-    # Read base phreeqc.dat
-    phreeqc_path = CONFIG.get_phreeqc_database()
+
+    # Create database-specific merged file
+    db_basename = db_name.replace('.dat', '')
+    merged_path = db_dir / f"{db_basename}_merged.dat"
+
+    # Read base database
+    phreeqc_path = CONFIG.get_phreeqc_database(db_name)
+    logger.info(f"Reading base database from: {phreeqc_path}")
     with open(phreeqc_path, 'r') as f:
         base_content = f.read()
-    
+
     # Verify exchange section exists
     if 'EXCHANGE_MASTER_SPECIES' not in base_content:
-        raise RuntimeError("Base database missing EXCHANGE_MASTER_SPECIES")
-    
-    # For high ionic strength (>10%), check for pitzer.dat
-    # For now, just use standard phreeqc.dat
+        raise RuntimeError(f"Base database {db_name} missing EXCHANGE_MASTER_SPECIES")
+
+    # For now, use base database as-is (future: could add custom reactions)
     merged_content = base_content
-    
+
     # Write merged database
     with open(merged_path, 'w') as f:
         f.write(merged_content)
-    
+
     # Verify
     verify_merged_database(merged_path)
-    
+
     logger.info(f"Created merged database at {merged_path}")
     return merged_path
 

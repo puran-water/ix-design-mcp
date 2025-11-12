@@ -948,36 +948,58 @@ END
             
             if len(ca_eff) > breakthrough_idx and feed_ca > 0:
                 ca_to_breakthrough = ca_eff[:breakthrough_idx+1]
-                avg_ca = np.trapz(ca_to_breakthrough, bvs_to_breakthrough) / breakthrough_bv if breakthrough_bv > 0 else 0
+                # Filter out None values before integration
+                ca_valid = np.array([x if x is not None else 0 for x in ca_to_breakthrough])
+                bvs_valid = np.array([x if x is not None else 0 for x in bvs_to_breakthrough])
+                avg_ca = np.trapz(ca_valid, bvs_valid) / breakthrough_bv if breakthrough_bv > 0 else 0
                 avg_ca_removal = 100 * (1 - avg_ca / feed_ca)
                 avg_ca_removal = max(0, min(100, avg_ca_removal))
             
             if len(mg_eff) > breakthrough_idx and feed_mg > 0:
                 mg_to_breakthrough = mg_eff[:breakthrough_idx+1]
-                avg_mg = np.trapz(mg_to_breakthrough, bvs_to_breakthrough) / breakthrough_bv if breakthrough_bv > 0 else 0
+                # Filter out None values before integration
+                mg_valid = np.array([x if x is not None else 0 for x in mg_to_breakthrough])
+                bvs_valid = np.array([x if x is not None else 0 for x in bvs_to_breakthrough])
+                avg_mg = np.trapz(mg_valid, bvs_valid) / breakthrough_bv if breakthrough_bv > 0 else 0
                 avg_mg_removal = 100 * (1 - avg_mg / feed_mg)
                 avg_mg_removal = max(0, min(100, avg_mg_removal))
             
             if len(hardness_eff) > breakthrough_idx and feed_hardness > 0:
                 hardness_to_breakthrough = hardness_eff[:breakthrough_idx+1]
-                avg_hardness = np.trapz(hardness_to_breakthrough, bvs_to_breakthrough) / breakthrough_bv if breakthrough_bv > 0 else 0
+                # Filter out None values before integration
+                hardness_valid = np.array([x if x is not None else 0 for x in hardness_to_breakthrough])
+                bvs_valid = np.array([x if x is not None else 0 for x in bvs_to_breakthrough])
+                avg_hardness = np.trapz(hardness_valid, bvs_valid) / breakthrough_bv if breakthrough_bv > 0 else 0
                 avg_hardness_removal = 100 * (1 - avg_hardness / feed_hardness)
                 avg_hardness_removal = max(0, min(100, avg_hardness_removal))
             
             if len(alk_eff) > breakthrough_idx and feed_alkalinity > 0:
-                # Treat negative alkalinity as zero for average calculation
-                alk_to_breakthrough = np.maximum(0, alk_eff[:breakthrough_idx+1])
-                avg_alk = np.trapz(alk_to_breakthrough, bvs_to_breakthrough) / breakthrough_bv if breakthrough_bv > 0 else 0
+                # Filter out None values and treat negative alkalinity as zero
+                alk_to_breakthrough = alk_eff[:breakthrough_idx+1]
+                alk_valid = np.array([max(0, x) if x is not None else 0 for x in alk_to_breakthrough])
+                bvs_valid = np.array([x if x is not None else 0 for x in bvs_to_breakthrough])
+                avg_alk = np.trapz(alk_valid, bvs_valid) / breakthrough_bv if breakthrough_bv > 0 else 0
                 avg_alk_removal = 100 * (1 - avg_alk / feed_alkalinity)
                 avg_alk_removal = max(0, min(100, avg_alk_removal))
         
-        # pH statistics
-        avg_ph = np.mean(ph_eff) if len(ph_eff) > 0 else 7.0
-        min_ph = np.min(ph_eff) if len(ph_eff) > 0 else 7.0
-        max_ph = np.max(ph_eff) if len(ph_eff) > 0 else 7.0
+        # pH statistics - filter out None values
+        if len(ph_eff) > 0:
+            ph_valid = [x for x in ph_eff if x is not None]
+            if len(ph_valid) > 0:
+                avg_ph = np.mean(ph_valid)
+                min_ph = np.min(ph_valid)
+                max_ph = np.max(ph_valid)
+            else:
+                avg_ph = min_ph = max_ph = 7.0
+        else:
+            avg_ph = min_ph = max_ph = 7.0
         
-        # CO2 generation
-        avg_co2 = np.mean(co2_eff) if len(co2_eff) > 0 else 0
+        # CO2 generation - filter out None values
+        if len(co2_eff) > 0:
+            co2_valid = [x for x in co2_eff if x is not None]
+            avg_co2 = np.mean(co2_valid) if len(co2_valid) > 0 else 0
+        else:
+            avg_co2 = 0
         
         # Active sites (for H-form) - from USER_PUNCH if available
         active_sites = breakthrough_data.get('Active_Sites_%', None)
@@ -1047,6 +1069,17 @@ class WacNaSimulation(BaseWACSimulation):
             water = water.model_copy(update={"flow_m3_hr": flow_per_vessel_m3_hr})
         else:
             flow_per_vessel_m3_hr = total_flow_m3_hr
+
+        # Check TDS and recommend Pitzer database if needed
+        tds_g_l = (
+            water.ca_mg_l + water.mg_mg_l + water.na_mg_l +
+            water.k_mg_l + water.nh4_mg_l +
+            getattr(water, 'cl_mg_l', 0) +
+            water.so4_mg_l + water.hco3_mg_l
+        ) / 1000.0
+        requires_pitzer, pitzer_msg = CONFIG.check_tds_for_pitzer(tds_g_l)
+        if requires_pitzer:
+            logger.warning(pitzer_msg)
 
         # Validate water composition
         self._validate_water_composition(water.model_dump())
@@ -1227,7 +1260,7 @@ class WacNaSimulation(BaseWACSimulation):
                 'ca_mg_l': sampled_data.get('Ca_mg/L', np.array([])).tolist(),
                 'mg_mg_l': sampled_data.get('Mg_mg/L', np.array([])).tolist(),
                 'na_mg_l': sampled_data.get('Na_mg/L', np.array([])).tolist(),
-                'alkalinity_mg_l': sampled_data.get('Alk_CaCO3_mg/L', sampled_data.get('Alk_mg/L', np.array([]))).tolist(),
+                'alkalinity_mg_l': sampled_data.get('Alk_mg/L_CaCO3', sampled_data.get('Alk_CaCO3_mg/L', sampled_data.get('Alk_mg/L', np.array([])))).tolist(),
                 'ph': sampled_data.get('pH', np.array([])).tolist()
             },
             performance_metrics=performance_metrics,
@@ -1262,14 +1295,14 @@ class WacHSimulation(BaseWACSimulation):
         H-form WAC only removes temporary hardness (hardness associated with alkalinity).
         """
         # Calculate feed hardness and alkalinity
-        feed_ca = water_analysis.ca_mg_l
-        feed_mg = water_analysis.mg_mg_l
+        feed_ca = water_analysis.ca_mg_l or 0
+        feed_mg = water_analysis.mg_mg_l or 0
         feed_hardness = feed_ca * 2.5 + feed_mg * 4.1
-        feed_alkalinity = water_analysis.hco3_mg_l / CONFIG.HCO3_EQUIV_WEIGHT * CONFIG.ALKALINITY_EQUIV_WEIGHT
-        
+        feed_alkalinity = (water_analysis.hco3_mg_l or 0) / CONFIG.HCO3_EQUIV_WEIGHT * CONFIG.ALKALINITY_EQUIV_WEIGHT
+
         # Calculate temporary and permanent hardness
-        temp_hardness = min(feed_hardness, feed_alkalinity)
-        perm_hardness = max(0, feed_hardness - feed_alkalinity)
+        temp_hardness = min(feed_hardness, feed_alkalinity) if feed_hardness is not None and feed_alkalinity is not None else 0
+        perm_hardness = max(0, feed_hardness - feed_alkalinity) if feed_hardness is not None and feed_alkalinity is not None else 0
         
         # If there's permanent hardness, adjust the effluent data
         if perm_hardness > 0 and 'Hardness_mg/L' in breakthrough_data:
@@ -1279,7 +1312,7 @@ class WacHSimulation(BaseWACSimulation):
             
             # Adjust each data point to ensure minimum permanent hardness remains
             for i in range(len(hardness_data)):
-                if hardness_data[i] < perm_hardness:
+                if hardness_data[i] is not None and hardness_data[i] < perm_hardness:
                     # Scale Ca and Mg proportionally
                     ca_ratio = feed_ca / (feed_ca + feed_mg)
                     mg_ratio = feed_mg / (feed_ca + feed_mg)
@@ -1290,11 +1323,11 @@ class WacHSimulation(BaseWACSimulation):
                     
                     # Adjust Ca and Mg data if available
                     if 'Ca_mg/L' in breakthrough_data:
-                        if breakthrough_data['Ca_mg/L'][i] < min_ca:
+                        if breakthrough_data['Ca_mg/L'][i] is not None and breakthrough_data['Ca_mg/L'][i] < min_ca:
                             breakthrough_data['Ca_mg/L'][i] = min_ca
-                    
+
                     if 'Mg_mg/L' in breakthrough_data:
-                        if breakthrough_data['Mg_mg/L'][i] < min_mg:
+                        if breakthrough_data['Mg_mg/L'][i] is not None and breakthrough_data['Mg_mg/L'][i] < min_mg:
                             breakthrough_data['Mg_mg/L'][i] = min_mg
                     
                     # Update hardness
@@ -1327,35 +1360,45 @@ class WacHSimulation(BaseWACSimulation):
         else:
             flow_per_vessel_m3_hr = total_flow_m3_hr
 
+        # Check TDS and recommend Pitzer database if needed
+        tds_g_l = (
+            water.ca_mg_l + water.mg_mg_l + water.na_mg_l +
+            water.k_mg_l + water.nh4_mg_l +
+            getattr(water, 'cl_mg_l', 0) +
+            water.so4_mg_l + water.hco3_mg_l
+        ) / 1000.0
+        requires_pitzer, pitzer_msg = CONFIG.check_tds_for_pitzer(tds_g_l)
+        if requires_pitzer:
+            logger.warning(pitzer_msg)
+
         # Validate water composition
         self._validate_water_composition(water.model_dump())
         
         # Calculate dynamic max_bv based on alkalinity loading (H-form primarily removes alkalinity)
         alkalinity_meq_L = water.hco3_mg_l / CONFIG.HCO3_EQUIV_WEIGHT
         
-        # Limit max_bv for WAC_H to prevent timeout
-        max_bv = min(
-            500,  # Hard limit to prevent timeout
-            self._calculate_dynamic_max_bv(
-                loading_meq_L=alkalinity_meq_L,
-                capacity_eq_L=CONFIG.WAC_H_WORKING_CAPACITY,
-                buffer_factor=1.2,
-                min_bv=200
-            )
+        # Calculate max_bv for WAC_H based on alkalinity loading
+        # Using TOTAL capacity since that's what the SURFACE model uses
+        max_bv = self._calculate_dynamic_max_bv(
+            loading_meq_L=alkalinity_meq_L,
+            capacity_eq_L=CONFIG.WAC_H_TOTAL_CAPACITY,  # 4.7 eq/L - matches SURFACE model
+            buffer_factor=1.2,
+            min_bv=200
         )
         
         logger.info(f"Dynamic max_bv calculated: {max_bv} (alkalinity loading: {alkalinity_meq_L:.2f} meq/L)")
         
         # Create PHREEQC input with dynamic max_bv
-        # Use fewer cells for WAC_H to improve performance
-        wac_h_cells = min(6, CONFIG.DEFAULT_CELLS)
+        # Use standard cell count for proper breakthrough front resolution
+        wac_h_cells = CONFIG.DEFAULT_CELLS  # Use 10 cells for better front tracking
         phreeqc_input = create_wac_h_phreeqc_input(
             water_composition=water.model_dump(),
             vessel_config=vessel.model_dump(),
             cells=wac_h_cells,
             max_bv=max_bv,
             enable_enhancements=CONFIG.ENABLE_IONIC_STRENGTH_CORRECTION or CONFIG.ENABLE_TEMPERATURE_CORRECTION,
-            capacity_factor=vessel.capacity_factor if hasattr(vessel, 'capacity_factor') else 1.0
+            capacity_factor=vessel.capacity_factor if hasattr(vessel, 'capacity_factor') else 1.0,
+            use_multistage=True  # Re-enable multistage for proper H-form initialization
         )
         
         # Run PHREEQC
@@ -1404,7 +1447,7 @@ class WacHSimulation(BaseWACSimulation):
         # Use shared detection method with multiple criteria in priority order
         criteria = [
             # Primary: Alkalinity breakthrough
-            ('Alk_CaCO3_mg/L', target_alkalinity, 'gt'),  # Now using CaCO3 units
+            ('Alk_mg/L_CaCO3', target_alkalinity, 'gt'),  # Now using CaCO3 units
             # Secondary: Hardness breakthrough (in case alkalinity is already low)
             ('Hardness_mg/L', target_hardness, 'gt')
             # Note: Active sites % not reliable for breakthrough detection
@@ -1473,7 +1516,7 @@ class WacHSimulation(BaseWACSimulation):
             }
 
         # Calculate capacity utilization
-        theoretical_capacity = CONFIG.WAC_H_WORKING_CAPACITY * vessel.bed_volume_L
+        theoretical_capacity = CONFIG.WAC_H_TOTAL_CAPACITY * vessel.bed_volume_L
         feed_alkalinity_eq = (water.hco3_mg_l / CONFIG.HCO3_EQUIV_WEIGHT) * flow_rate_m3_hr * service_time_hours
         capacity_utilization = (feed_alkalinity_eq / theoretical_capacity * 100) if theoretical_capacity > 0 else 0
         
@@ -1522,7 +1565,8 @@ class WacHSimulation(BaseWACSimulation):
             breakthrough_data={
                 'bv': sampled_data.get('BV', np.array([])).tolist(),
                 'hardness_mg_l': sampled_data.get(hardness_key, np.array([])).tolist(),
-                'alkalinity_mg_l': sampled_data.get('Alk_CaCO3_mg/L', sampled_data.get('Alk_mg/L', np.array([]))).tolist(),
+                'alkalinity_mg_l': sampled_data.get('Alk_mg/L_CaCO3', sampled_data.get('Alk_CaCO3_mg/L', sampled_data.get('Alk_mg/L', np.array([])))).tolist(),
+                'temporary_hardness_mg_l': sampled_data.get('Temp_Hard', np.array([])).tolist(),
                 'ca_mg_l': sampled_data.get('Ca_mg/L', np.array([])).tolist(),
                 'mg_mg_l': sampled_data.get('Mg_mg/L', np.array([])).tolist(),
                 'na_mg_l': sampled_data.get('Na_mg/L', np.array([])).tolist(),
