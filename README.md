@@ -306,6 +306,100 @@ operating_capacity = total_capacity × alpha
 - Automatic flowsheet construction from vessel parameters
 - IDAES solver configuration for robust convergence
 
+### Hydraulics Calculations
+All configuration tools perform rigorous hydraulic analysis using industry-standard correlations:
+
+**Ergun Equation** (Pressure Drop):
+- Service and backwash pressure drop calculations
+- Accounts for viscous and inertial flow regimes
+- Temperature-corrected water viscosity
+- Particle size and bed porosity effects
+
+**Richardson-Zaki Correlation** (Bed Expansion):
+- Predicts bed expansion during backwash
+- Based on terminal settling velocity (Stokes' Law)
+- Expansion factor depends on particle Reynolds number
+- Critical for freeboard sizing
+
+**AWWA B100 Compliance**:
+- Service velocity range: 5-40 m/h (design: 16 BV/hr)
+- Minimum 5 m/h to prevent maldistribution
+- Maximum 40 m/h to limit pressure drop
+- Warnings generated for out-of-spec conditions
+
+**Distributor Design**:
+- Nozzle velocity calculations (max 15 m/s recommended)
+- Headloss estimation for underdrain systems
+- Proper distribution critical for efficient regeneration
+
+All hydraulic results included in `hydraulic_analysis` output field.
+
+### Charge Balance Auto-Calculation
+Water composition models automatically ensure electroneutrality:
+
+**Automatic Chloride Calculation**:
+- If Cl⁻ not provided, calculated from cation-anion balance
+- Uses equivalent weights for charge conversion
+- Prevents invalid water chemistry from reaching PHREEQC
+
+**Strict Mode** (`strict_charge_balance=True`):
+- Raises `ValueError` if charge imbalance exceeds 5%
+- Useful for validating measured water analyses
+- Default: `False` (auto-correct with warnings)
+
+**Imbalance Warnings**:
+- Warns if imbalance > 5% before correction
+- Provides ion inventory in error messages
+- Helps identify data entry errors
+
+Example:
+```python
+# Auto-corrects Cl⁻ with warning (default)
+water = SACWaterComposition(
+    flow_m3_hr=100,
+    ca_mg_l=80, mg_mg_l=25, na_mg_l=100,
+    hco3_mg_l=122, so4_mg_l=960, pH=7.5
+    # cl_mg_l omitted - will be calculated
+)
+
+# Strict mode - raises error if imbalanced
+water = SACWaterComposition(
+    ...,
+    strict_charge_balance=True  # Fails if anions > cations
+)
+```
+
+### WaterTAP Control
+Control WaterTAP integration via `IX_WATERTAP` environment variable:
+
+**Options**:
+- `"off"` (default): PHREEQC-only mode, no economic costing
+- `"auto"`: Attempt WaterTAP with smoke test, fallback on failure
+- `"on"`: Require WaterTAP, error if unavailable
+
+**Rationale**:
+- WaterTAP adds 5-10 seconds subprocess overhead
+- Import conflicts can cause hangs on some systems
+- PHREEQC-only provides chemistry results in 2-5 seconds
+- Economic costing optional for many applications
+
+**Usage**:
+```bash
+# Disable WaterTAP (faster, no costing)
+export IX_WATERTAP=off
+
+# Enable with graceful fallback (recommended for production)
+export IX_WATERTAP=auto
+
+# Require WaterTAP (fails if not installed)
+export IX_WATERTAP=on
+```
+
+**Smoke Test**:
+- When `auto` mode enabled, runs quick WaterTAP import test
+- Isolated subprocess prevents crashes if WaterTAP broken
+- Falls back to PHREEQC-only if smoke test fails
+
 ### Process Isolation
 The server uses subprocess.Popen with timeout protection for WaterTAP operations, preventing:
 - Import graph conflicts with MCP server

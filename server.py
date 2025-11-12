@@ -483,7 +483,22 @@ def ensure_simulation_input_complete(input_data: Dict[str, Any], resin_type: str
     """
 )
 async def configure_sac_ix(configuration_input: Dict[str, Any]) -> Dict[str, Any]:
-    """Configure SAC vessel with hydraulic sizing only."""
+    """
+    MCP tool handler for SAC vessel configuration.
+
+    Wraps configure_sac_vessel() with MCP-specific error handling,
+    timeout management (60s default), and JSON serialization.
+
+    Uses Gaines-Thomas equilibrium for hardness leakage prediction
+    and rigorous hydraulics (Ergun pressure drop, Richardson-Zaki expansion).
+
+    Args:
+        configuration_input: Dict with 'water_analysis' and 'target_hardness_mg_l_caco3'
+
+    Returns:
+        Dict with vessel configuration, hydraulic analysis, and design notes,
+        or error dict with status, error message, and hints.
+    """
     import time
     start_time = time.time()
     logger.info(f"configure_sac_ix started at {start_time}")
@@ -610,7 +625,25 @@ async def configure_sac_ix(configuration_input: Dict[str, Any]) -> Dict[str, Any
     """
 )
 async def configure_wac_ix(configuration_input: Dict[str, Any]) -> Dict[str, Any]:
-    """Configure WAC vessel with hydraulic sizing."""
+    """
+    MCP tool handler for WAC vessel configuration.
+
+    Wraps configure_wac_vessel() with MCP-specific error handling and timeout management.
+
+    WAC resins have pH-dependent capacity. Supports two forms:
+    - WAC_Na: Two-step regeneration (acid + caustic), higher capacity
+    - WAC_H: Single-step acid regeneration, generates CO2, removes alkalinity
+
+    Includes rigorous hydraulics (Ergun, Richardson-Zaki) and optional
+    knowledge-based performance prediction when PHREEQC unavailable.
+
+    Args:
+        configuration_input: Dict with 'water_analysis', 'resin_type', and targets
+
+    Returns:
+        Dict with vessel configuration, hydraulic analysis, regeneration sequence,
+        and water chemistry notes, or error dict with status and hints.
+    """
     import time
     start_time = time.time()
     logger.info(f"configure_wac_ix started at {start_time}")
@@ -780,7 +813,37 @@ if NOTEBOOK_RUNNER_AVAILABLE:
     """
 )
 async def simulate_ix_watertap(simulation_input: str) -> Dict[str, Any]:
-    """Execute hybrid PHREEQC + WaterTAP simulation."""
+    """
+    MCP tool handler for hybrid IX simulation.
+
+    Combines PHREEQC chemistry with WaterTAP economic costing for
+    complete ion exchange system design and analysis.
+
+    PHREEQC provides:
+    - Multi-ion competition and selectivity
+    - Breakthrough curve predictions
+    - Regeneration efficiency modeling
+    - Mass balance validation
+
+    WaterTAP provides:
+    - EPA-WBS equipment cost correlations
+    - OPEX calculations (chemicals, energy, maintenance)
+    - Levelized cost of water (LCOW)
+    - Flowsheet construction and solving
+
+    Controlled by IX_WATERTAP environment variable:
+    - "off": PHREEQC-only (fast, no costing)
+    - "auto": Try WaterTAP with fallback (recommended)
+    - "on": Require WaterTAP (error if unavailable)
+
+    Args:
+        simulation_input: JSON string with unified schema (water, vessel, targets, cycle, pricing)
+
+    Returns:
+        Dict with IXSimulationResult containing performance metrics,
+        economic analysis, breakthrough curves, and artifacts,
+        or error dict with status and troubleshooting hints.
+    """
     try:
         # Validate input size
         if len(simulation_input) > MAX_REQUEST_SIZE:
