@@ -58,32 +58,77 @@ class SACWaterComposition(BaseModel):
     co2_mg_l: float = Field(0.0, description="Carbon dioxide")
     sio2_mg_l: float = Field(0.0, description="Silica")
     b_oh_3_mg_l: float = Field(0.0, description="Boric acid")
-    
+
+    # Validation options
+    strict_charge_balance: bool = Field(
+        False,
+        description="If True, raise ValueError on charge imbalance instead of auto-correcting"
+    )
+
     def model_post_init(self, __context):
         """Auto-calculate Cl if not provided for charge balance"""
         if self.cl_mg_l is None:
             # Calculate charge balance using centralized equivalent weights
             cation_meq = (
-                self.ca_mg_l/CONFIG.CA_EQUIV_WEIGHT + 
-                self.mg_mg_l/CONFIG.MG_EQUIV_WEIGHT + 
+                self.ca_mg_l/CONFIG.CA_EQUIV_WEIGHT +
+                self.mg_mg_l/CONFIG.MG_EQUIV_WEIGHT +
                 self.na_mg_l/CONFIG.NA_EQUIV_WEIGHT +
-                self.k_mg_l/CONFIG.K_EQUIV_WEIGHT + 
+                self.k_mg_l/CONFIG.K_EQUIV_WEIGHT +
                 self.nh4_mg_l/CONFIG.NH4_EQUIV_WEIGHT +
-                self.fe2_mg_l/CONFIG.FE2_EQUIV_WEIGHT + 
+                self.fe2_mg_l/CONFIG.FE2_EQUIV_WEIGHT +
                 self.fe3_mg_l/CONFIG.FE3_EQUIV_WEIGHT
             )
             anion_meq = (
-                self.hco3_mg_l/CONFIG.HCO3_EQUIV_WEIGHT + 
+                self.hco3_mg_l/CONFIG.HCO3_EQUIV_WEIGHT +
                 self.so4_mg_l/CONFIG.SO4_EQUIV_WEIGHT +
-                self.co3_mg_l/CONFIG.CO3_EQUIV_WEIGHT + 
+                self.co3_mg_l/CONFIG.CO3_EQUIV_WEIGHT +
                 self.no3_mg_l/CONFIG.NO3_EQUIV_WEIGHT +
-                self.po4_mg_l/CONFIG.PO4_EQUIV_WEIGHT + 
-                self.f_mg_l/CONFIG.F_EQUIV_WEIGHT + 
+                self.po4_mg_l/CONFIG.PO4_EQUIV_WEIGHT +
+                self.f_mg_l/CONFIG.F_EQUIV_WEIGHT +
                 self.oh_mg_l/CONFIG.OH_EQUIV_WEIGHT
             )
-            # Set Cl to balance
-            self.cl_mg_l = max(0, (cation_meq - anion_meq) * CONFIG.CL_EQUIV_WEIGHT)
-            logger.info(f"Auto-calculated Cl for charge balance: {self.cl_mg_l:.1f} mg/L")
+
+            # Calculate required Cl for balance
+            cl_required_meq = cation_meq - anion_meq
+            cl_required_mg_l = cl_required_meq * CONFIG.CL_EQUIV_WEIGHT
+
+            # Check for charge imbalance
+            total_meq = max(cation_meq, anion_meq)
+            if total_meq > 0:
+                imbalance_pct = abs(cl_required_meq / total_meq) * 100
+            else:
+                imbalance_pct = 0
+
+            # Handle negative Cl (anions > cations)
+            if cl_required_mg_l < 0:
+                error_msg = (
+                    f"Charge imbalance: anions exceed cations by {-cl_required_meq:.2f} meq/L "
+                    f"({imbalance_pct:.1f}% imbalance). "
+                    f"Ion inventory: Ca={self.ca_mg_l:.1f}, Mg={self.mg_mg_l:.1f}, "
+                    f"Na={self.na_mg_l:.1f}, K={self.k_mg_l:.1f}, HCO3={self.hco3_mg_l:.1f}, "
+                    f"SO4={self.so4_mg_l:.1f}, CO3={self.co3_mg_l:.1f} mg/L. "
+                    f"Provide explicit Cl⁻ or correct the analysis."
+                )
+                if self.strict_charge_balance:
+                    raise ValueError(error_msg)
+                else:
+                    logger.warning(f"{error_msg} Clamping Cl⁻ to 0 mg/L.")
+                    self.cl_mg_l = 0.0
+            else:
+                self.cl_mg_l = cl_required_mg_l
+                logger.info(f"Auto-calculated Cl for charge balance: {self.cl_mg_l:.1f} mg/L")
+
+                # Warn if imbalance is significant (>5%)
+                if imbalance_pct > 5.0:
+                    warn_msg = (
+                        f"Significant charge imbalance: {imbalance_pct:.1f}% "
+                        f"(cations={cation_meq:.2f} meq/L, anions={anion_meq:.2f} meq/L). "
+                        f"Verify water analysis data."
+                    )
+                    if self.strict_charge_balance and imbalance_pct > 10.0:
+                        raise ValueError(warn_msg + " Exceeds 10% threshold in strict mode.")
+                    else:
+                        logger.warning(warn_msg)
 
 
 class SACConfigurationInput(BaseModel):
