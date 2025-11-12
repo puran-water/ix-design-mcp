@@ -139,7 +139,35 @@ class SACWaterComposition(BaseModel):
 
 
 class SACConfigurationInput(BaseModel):
-    """Input for SAC configuration"""
+    """
+    Input for SAC vessel configuration.
+
+    SAC (Strong Acid Cation) resins are used for complete hardness removal
+    in RO pretreatment applications. Uses Gaines-Thomas equilibrium to predict
+    hardness leakage based on feed water composition.
+
+    Args:
+        water_analysis: Water composition (SACWaterComposition)
+        target_hardness_mg_l_caco3: Target effluent hardness (default 5.0 mg/L, typical range 1-5 mg/L for RO)
+
+    Note:
+        All water parameters must be inside 'water_analysis' object.
+        Chloride is auto-calculated for charge balance if not provided.
+
+    Example:
+        {
+            "water_analysis": {
+                "flow_m3_hr": 100,
+                "ca_mg_l": 80.06,
+                "mg_mg_l": 24.29,
+                "na_mg_l": 230.0,
+                "hco3_mg_l": 122.0,
+                "pH": 7.5,
+                "so4_mg_l": 96.0
+            },
+            "target_hardness_mg_l_caco3": 5.0
+        }
+    """
     water_analysis: SACWaterComposition
     target_hardness_mg_l_caco3: float = Field(
         5.0,

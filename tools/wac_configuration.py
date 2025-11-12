@@ -129,7 +129,39 @@ class WACWaterComposition(BaseModel):
 
 
 class WACConfigurationInput(BaseModel):
-    """Input for WAC configuration"""
+    """
+    Input for WAC vessel configuration.
+
+    WAC (Weak Acid Cation) resins have pH-dependent capacity and are used for
+    alkalinity removal and hardness reduction. Two forms available:
+
+    - WAC_Na: Sodium form, uses two-step regeneration (acid + caustic)
+    - WAC_H: Hydrogen form, single-step acid regeneration, generates CO2
+
+    Args:
+        water_analysis: Water composition with required alkalinity (hco3_mg_l)
+        resin_type: Either "WAC_Na" or "WAC_H"
+        target_hardness_mg_l_caco3: Target effluent hardness (default 5.0 mg/L)
+        target_alkalinity_mg_l_caco3: Target alkalinity for H-form (required for WAC_H)
+
+    Note:
+        WAC_H requires target_alkalinity because it removes alkalinity and generates CO2.
+        Alkalinity (hco3_mg_l) in water_analysis is critical for WAC performance.
+
+    Example:
+        {
+            "water_analysis": {
+                "flow_m3_hr": 100,
+                "ca_mg_l": 80.06,
+                "mg_mg_l": 24.29,
+                "na_mg_l": 838.9,
+                "hco3_mg_l": 121.95,  # Required for WAC
+                "pH": 7.8
+            },
+            "resin_type": "WAC_Na",
+            "target_hardness_mg_l_caco3": 5.0
+        }
+    """
     water_analysis: WACWaterComposition
     resin_type: str = Field(..., description="WAC_Na or WAC_H")
     target_hardness_mg_l_caco3: float = Field(
