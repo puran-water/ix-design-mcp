@@ -16,6 +16,13 @@ from pathlib import Path
 # Import centralized configuration
 from .core_config import CONFIG
 
+# Import hydraulics calculations
+from .hydraulics import (
+    calculate_system_hydraulics,
+    STANDARD_WAC_RESIN,
+    HydraulicResult
+)
+
 # Import knowledge-based configurator for WAC_H
 try:
     from .knowledge_based_config import KnowledgeBasedConfigurator
@@ -183,6 +190,22 @@ class WACRegenerationPerformance(BaseModel):
     step1: Optional[Dict[str, Any]] = Field(None, description="First step details")
     step2: Optional[Dict[str, Any]] = Field(None, description="Second step details")
 
+
+class HydraulicAnalysis(BaseModel):
+    """Hydraulic analysis results from Ergun and Richardson-Zaki calculations"""
+    pressure_drop_service_kpa: float = Field(..., description="Service pressure drop (Ergun equation)")
+    pressure_drop_backwash_kpa: float = Field(..., description="Backwash pressure drop")
+    bed_expansion_percent: float = Field(..., description="Bed expansion during backwash (Richardson-Zaki)")
+    expanded_bed_depth_m: float = Field(..., description="Expanded bed depth during backwash")
+    required_freeboard_m: float = Field(..., description="Required freeboard (expansion × safety factor)")
+    distributor_headloss_kpa: float = Field(..., description="Distributor/collector headloss")
+    nozzle_velocity_m_s: float = Field(..., description="Velocity through distributor nozzles")
+    linear_velocity_m_hr: float = Field(..., description="Service linear velocity (for AWWA B100 check)")
+    velocity_in_range: bool = Field(..., description="True if 5-40 m/hr (AWWA B100 compliant)")
+    expansion_acceptable: bool = Field(..., description="True if expansion <100%")
+    warnings: List[str] = Field(..., description="Hydraulic design warnings")
+
+
 class WACConfigurationOutput(BaseModel):
     """Output from WAC configuration with performance metrics"""
     vessel_configuration: WACVesselConfiguration
@@ -193,6 +216,7 @@ class WACConfigurationOutput(BaseModel):
     service_performance: Optional[WACServicePerformance] = Field(None, description="Service performance")
     regeneration_parameters: Dict[str, Any]  # Legacy format
     regeneration_performance: Optional[WACRegenerationPerformance] = Field(None, description="Regeneration details")
+    hydraulic_analysis: Optional[HydraulicAnalysis] = Field(None, description="Hydraulic analysis (Ergun ΔP, bed expansion)")
     design_notes: List[str]
     water_chemistry_notes: List[str]
     calculation_method: str = Field("hydraulic_only", description="Calculation method used")
@@ -290,6 +314,7 @@ def configure_wac_vessel(input_data: WACConfigurationInput) -> WACConfigurationO
             service_performance=service_performance,
             regeneration_parameters=kb_config['regeneration'],
             regeneration_performance=regeneration_performance,
+            hydraulic_analysis=None,  # Not calculated in knowledge-based path
             design_notes=[
                 f"Knowledge-based configuration (PHREEQC bypassed)",
                 f"Breakthrough: {perf['breakthrough_BV']:.0f} BV for alkalinity",
@@ -396,19 +421,41 @@ def configure_wac_vessel(input_data: WACConfigurationInput) -> WACConfigurationO
     
     # Add N+1 redundancy
     n_standby = 1
-    
-    # Calculate freeboard considering bed expansion
-    bed_expansion_percent = resin_params["hydraulic"]["bed_expansion_percent"]
-    freeboard_percent = resin_params["hydraulic"]["freeboard_percent"]
-    
-    # Freeboard must accommodate both expansion and normal operation
-    expansion_height = bed_depth * bed_expansion_percent / 100
-    normal_freeboard = bed_depth * freeboard_percent / 100
-    freeboard_m = max(expansion_height, normal_freeboard)
-    
-    design_notes.append(f"Bed expansion during regeneration: {bed_expansion_percent}%")
+
+    # Perform hydraulic analysis (Ergun ΔP, Richardson-Zaki expansion)
+    # Estimate backwash flow rate: typically 1.5-2.0× service flow for bed expansion
+    backwash_flow_m3_h = (water.flow_m3_hr / n_service) * 1.75  # Per vessel
+
+    hydraulic_result = calculate_system_hydraulics(
+        bed_depth_m=bed_depth,
+        bed_diameter_m=diameter,
+        service_flow_m3_h=(water.flow_m3_hr / n_service),  # Per vessel
+        backwash_flow_m3_h=backwash_flow_m3_h,
+        resin_props=STANDARD_WAC_RESIN,
+        temperature_c=20.0,
+        freeboard_safety_factor=1.5
+    )
+
+    # Use hydraulic-calculated freeboard with minimum allowance for hardware
+    # AWWA guidelines: minimum 0.3m for distributor/internals
+    MINIMUM_FREEBOARD_M = 0.3
+    freeboard_m = max(hydraulic_result.required_freeboard_m, MINIMUM_FREEBOARD_M)
+
+    # Add hydraulic warnings to design notes
+    if hydraulic_result.warnings:
+        design_notes.extend(hydraulic_result.warnings)
+
+    # Log hydraulic analysis results
+    logger.info(f"Hydraulic analysis:")
+    logger.info(f"  - Service ΔP: {hydraulic_result.pressure_drop_service_kpa:.1f} kPa (Ergun equation)")
+    logger.info(f"  - Backwash ΔP: {hydraulic_result.pressure_drop_backwash_kpa:.1f} kPa")
+    logger.info(f"  - Bed expansion: {hydraulic_result.bed_expansion_percent:.1f}% (Richardson-Zaki)")
+    logger.info(f"  - Required freeboard: {hydraulic_result.required_freeboard_m:.2f} m")
+    logger.info(f"  - AWWA B100 compliant: {hydraulic_result.velocity_in_range}")
+
+    design_notes.append(f"Bed expansion during regeneration: {hydraulic_result.bed_expansion_percent:.1f}% (Richardson-Zaki)")
     design_notes.append(f"Freeboard sized for: {freeboard_m:.2f} m")
-    
+
     # Total vessel height
     vessel_height = bed_depth + freeboard_m + 0.3 + 0.2  # Bottom/top internals
     
@@ -456,7 +503,7 @@ def configure_wac_vessel(input_data: WACConfigurationInput) -> WACConfigurationO
             resin_volume_m3=round(resin_volume_per_vessel, 2),
             freeboard_m=round(freeboard_m, 2),
             vessel_height_m=round(vessel_height, 2),
-            bed_expansion_percent=bed_expansion_percent
+            bed_expansion_percent=hydraulic_result.bed_expansion_percent
         ),
         water_analysis=water,
         resin_type=resin_type,
@@ -465,6 +512,19 @@ def configure_wac_vessel(input_data: WACConfigurationInput) -> WACConfigurationO
         service_performance=None,  # No performance calc for WAC_Na yet
         regeneration_parameters=regeneration_params,
         regeneration_performance=None,
+        hydraulic_analysis=HydraulicAnalysis(
+            pressure_drop_service_kpa=round(hydraulic_result.pressure_drop_service_kpa, 2),
+            pressure_drop_backwash_kpa=round(hydraulic_result.pressure_drop_backwash_kpa, 2),
+            bed_expansion_percent=round(hydraulic_result.bed_expansion_percent, 1),
+            expanded_bed_depth_m=round(hydraulic_result.expanded_bed_depth_m, 2),
+            required_freeboard_m=round(hydraulic_result.required_freeboard_m, 2),
+            distributor_headloss_kpa=round(hydraulic_result.distributor_headloss_kpa, 2),
+            nozzle_velocity_m_s=round(hydraulic_result.nozzle_velocity_m_s, 2),
+            linear_velocity_m_hr=round(actual_linear_velocity, 1),
+            velocity_in_range=hydraulic_result.velocity_in_range,
+            expansion_acceptable=hydraulic_result.expansion_acceptable,
+            warnings=hydraulic_result.warnings
+        ),
         design_notes=design_notes,
         water_chemistry_notes=water_chemistry_notes,
         calculation_method="hydraulic_only"
