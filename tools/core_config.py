@@ -43,6 +43,7 @@ class CoreConfig:
     
     # Hydraulic design parameters
     MAX_BED_VOLUME_PER_HOUR: float = 16.0  # Maximum service flow rate (BV/hr)
+    MIN_LINEAR_VELOCITY_M_HR: float = 5.0   # Minimum linear velocity (m/hr) to prevent maldistribution
     MAX_LINEAR_VELOCITY_M_HR: float = 25.0  # Maximum linear velocity (m/hr)
     MIN_BED_DEPTH_M: float = 0.75  # Minimum bed depth for proper distribution
     FREEBOARD_PERCENT: float = 100.0  # SAC resins need 100% freeboard for expansion
@@ -64,7 +65,11 @@ class CoreConfig:
     PO4_EQUIV_WEIGHT: float = 31.67 # PO4-3: 94.97/3
     F_EQUIV_WEIGHT: float = 19.0    # F-: 19.00/1
     OH_EQUIV_WEIGHT: float = 17.0   # OH-: 17.01/1
-    
+
+    # SAC selectivity coefficients (log K values for 8% DVB standard resin)
+    SAC_LOGK_CA_NA: float = 0.416   # Ca/Na selectivity for SAC (8% DVB)
+    SAC_LOGK_MG_NA: float = 0.221   # Mg/Na selectivity for SAC (8% DVB)
+
     # WAC-specific constants
     ALKALINITY_EQUIV_WEIGHT: float = 50.04  # Alkalinity as CaCO3: 100.09/2
     H_EQUIV_WEIGHT: float = 1.008   # H+: 1.008/1
@@ -74,9 +79,9 @@ class CoreConfig:
     # WAC resin parameters
     WAC_PKA: float = 4.8            # pKa for carboxylic acid groups
     WAC_NA_TOTAL_CAPACITY: float = 4.7  # Total capacity in eq/L
-    WAC_H_TOTAL_CAPACITY: float = 4.7   # Total capacity in eq/L
+    WAC_H_TOTAL_CAPACITY: float = 4.7   # eq/L - Total theoretical capacity
     WAC_NA_WORKING_CAPACITY: float = 1.8  # Working capacity in eq/L
-    WAC_H_WORKING_CAPACITY: float = 1.6   # Working capacity in eq/L
+    WAC_H_WORKING_CAPACITY: float = 1.6   # eq/L - Typical working capacity at pH 4.5 leakage
     
     # WAC selectivity coefficients (log K values)
     WAC_LOGK_CA_NA: float = 1.30    # Ca/Na selectivity for WAC
@@ -98,7 +103,13 @@ class CoreConfig:
     # WAC performance thresholds
     WAC_MIN_ACTIVE_SITES_PERCENT: float = 10.0  # Minimum active sites for H-form WAC
     WAC_ALKALINITY_LEAK_MG_L: float = 5.0       # Alkalinity leak threshold (mg/L as CaCO3)
-    
+
+    # WAC H-form kinetic model parameters (SURFACE + KINETICS)
+    WAC_H_DEPROTONATION_RATE: float = 1e-4      # Rate constant (1/s) for H+ release control
+    WAC_H_INITIAL_PROTONATION: float = 0.6      # Initial fraction of sites protonated (60%)
+    WAC_H_TARGET_PH_RECOVERY_BV: float = 20.0   # Target BV for pH recovery
+    WAC_H_USE_CVODE: bool = True                # Use CVODE for accurate kinetic integration
+
     # Universal Enhancement Parameters
     
     # Enhancement control flags
@@ -141,7 +152,7 @@ class CoreConfig:
     
     # Simulation parameters
     DEFAULT_TOLERANCE: float = 1e-6  # Numerical tolerance for convergence
-    DEFAULT_CELLS: int = 8  # Number of cells for column discretization (reduced from 10 for speed)
+    DEFAULT_CELLS: int = 8  # Number of cells for column discretization
     DEFAULT_MAX_BV: int = 200  # Maximum bed volumes to simulate
     
     # PHREEQC executable path (from environment or default)
