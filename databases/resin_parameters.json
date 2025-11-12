@@ -1,4 +1,5 @@
 {
+  "_comment": "Resin operational parameters for hydraulics and regeneration. For PHREEQC chemistry selectivity (log_k values), see resin_selectivity.json. The selectivity_coefficients in this file are legacy reference values (raw K ratios) and are NOT used by the simulation code.",
   "resin_types": {
     "SAC": {
       "description": "Strong Acid Cation resin (sulfonic acid functional group)",

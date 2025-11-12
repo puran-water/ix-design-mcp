@@ -1,0 +1,669 @@
+{
+  "description": "Ion exchange resin selectivity coefficients database for PHREEQC chemistry",
+  "usage_note": "This file contains thermodynamic selectivity data (log_k). For hydraulic/regeneration parameters, see resin_parameters.json",
+  "units": "log_k values for PHREEQC EXCHANGE_SPECIES",
+  "reference_conditions": "25\u00b0C, Na+ as reference (log_k = 0), converted from Li+ reference (Helfferich)",
+  "sources": [
+    "Helfferich, Ion Exchange (1962)",
+    "Bonner & Smith, J. Phys. Chem. (1957)",
+    "Myers & Boyd, J. Phys. Chem. (1956)"
+  ],
+  "resin_types": {
+    "SAC_2DVB": {
+      "description": "Low crosslinked strong acid cation resin (2% DVB)",
+      "total_capacity_eq_L": 1.5,
+      "moisture_content": 0.72,
+      "reference": "Myers & Boyd Table 5-12",
+      "exchange_species": {
+        "Na_X": {
+          "log_k": 0.0,
+          "reference": true,
+          "gamma": [
+            4.0,
+            0.075
+          ]
+        },
+        "Li_X": {
+          "log_k": -0.05,
+          "gamma": [
+            6.0,
+            0.0
+          ]
+        },
+        "K_X": {
+          "log_k": 0.3,
+          "gamma": [
+            3.5,
+            0.015
+          ]
+        },
+        "Rb_X": {
+          "log_k": 0.38,
+          "gamma": [
+            3.0,
+            0.015
+          ]
+        },
+        "Cs_X": {
+          "log_k": 0.43,
+          "gamma": [
+            2.5,
+            0.0
+          ]
+        },
+        "NH4_X": {
+          "log_k": 0.28,
+          "gamma": [
+            3.0,
+            0.015
+          ]
+        },
+        "Ca_X2": {
+          "log_k": 0.45,
+          "gamma": [
+            5.0,
+            0.165
+          ],
+          "notes": "Lower selectivity at low crosslinking"
+        },
+        "Mg_X2": {
+          "log_k": 0.38,
+          "gamma": [
+            5.5,
+            0.2
+          ]
+        },
+        "Sr_X2": {
+          "log_k": 0.55,
+          "gamma": [
+            5.0,
+            0.165
+          ]
+        },
+        "Ba_X2": {
+          "log_k": 0.7,
+          "gamma": [
+            5.0,
+            0.165
+          ]
+        }
+      }
+    },
+    "SAC_4DVB": {
+      "description": "Medium crosslinked strong acid cation resin (4% DVB)",
+      "total_capacity_eq_L": 1.8,
+      "moisture_content": 0.62,
+      "reference": "Literature compilation",
+      "exchange_species": {
+        "Na_X": {
+          "log_k": 0.0,
+          "reference": true,
+          "gamma": [
+            4.0,
+            0.075
+          ]
+        },
+        "Li_X": {
+          "log_k": -0.199,
+          "gamma": [
+            6.0,
+            0.0
+          ]
+        },
+        "K_X": {
+          "log_k": 0.157,
+          "gamma": [
+            3.5,
+            0.015
+          ]
+        },
+        "Rb_X": {
+          "log_k": 0.192,
+          "gamma": [
+            3.0,
+            0.015
+          ]
+        },
+        "Cs_X": {
+          "log_k": 0.228,
+          "gamma": [
+            2.5,
+            0.0
+          ]
+        },
+        "NH4_X": {
+          "log_k": 0.08,
+          "gamma": [
+            3.0,
+            0.015
+          ]
+        },
+        "Ca_X2": {
+          "log_k": 0.419,
+          "gamma": [
+            5.0,
+            0.165
+          ]
+        },
+        "Mg_X2": {
+          "log_k": 0.271,
+          "gamma": [
+            5.5,
+            0.2
+          ]
+        },
+        "Sr_X2": {
+          "log_k": 0.473,
+          "gamma": [
+            5.0,
+            0.165
+          ]
+        },
+        "Ba_X2": {
+          "log_k": 0.675,
+          "gamma": [
+            5.0,
+            0.165
+          ]
+        },
+        "Zn_X2": {
+          "log_k": 0.297,
+          "gamma": [
+            5.0,
+            0.2
+          ]
+        },
+        "Cu_X2": {
+          "log_k": 0.319,
+          "gamma": [
+            5.0,
+            0.2
+          ]
+        },
+        "Fe_X2": {
+          "log_k": 0.48,
+          "gamma": [
+            6.0,
+            0.2
+          ]
+        },
+        "Mn_X2": {
+          "log_k": 0.46,
+          "gamma": [
+            5.0,
+            0.2
+          ]
+        }
+      }
+    },
+    "SAC_8DVB": {
+      "description": "Standard crosslinked strong acid cation resin (8% DVB)",
+      "total_capacity_eq_L": 2.0,
+      "moisture_content": 0.5,
+      "reference": "Standard commercial resin",
+      "exchange_species": {
+        "Na_X": {
+          "log_k": 0.0,
+          "reference": true,
+          "gamma": [
+            4.0,
+            0.075
+          ]
+        },
+        "Li_X": {
+          "log_k": -0.297,
+          "gamma": [
+            6.0,
+            0.0
+          ]
+        },
+        "K_X": {
+          "log_k": 0.166,
+          "gamma": [
+            3.5,
+            0.015
+          ]
+        },
+        "Rb_X": {
+          "log_k": 0.203,
+          "gamma": [
+            3.0,
+            0.015
+          ]
+        },
+        "Cs_X": {
+          "log_k": 0.215,
+          "gamma": [
+            2.5,
+            0.0
+          ]
+        },
+        "NH4_X": {
+          "log_k": 0.11,
+          "gamma": [
+            3.0,
+            0.015
+          ]
+        },
+        "H_X": {
+          "log_k": -0.193,
+          "gamma": [
+            9.0,
+            0.0
+          ],
+          "notes": "H+ preferred over Na+"
+        },
+        "Ca_X2": {
+          "log_k": 0.416,
+          "gamma": [
+            5.0,
+            0.165
+          ]
+        },
+        "Mg_X2": {
+          "log_k": 0.221,
+          "gamma": [
+            5.5,
+            0.2
+          ]
+        },
+        "Sr_X2": {
+          "log_k": 0.517,
+          "gamma": [
+            5.0,
+            0.165
+          ]
+        },
+        "Ba_X2": {
+          "log_k": 0.764,
+          "gamma": [
+            5.0,
+            0.165
+          ]
+        },
+        "Zn_X2": {
+          "log_k": 0.244,
+          "gamma": [
+            5.0,
+            0.2
+          ]
+        },
+        "Cu_X2": {
+          "log_k": 0.289,
+          "gamma": [
+            5.0,
+            0.2
+          ]
+        },
+        "Ni_X2": {
+          "log_k": 0.298,
+          "gamma": [
+            5.0,
+            0.2
+          ]
+        },
+        "Co_X2": {
+          "log_k": 0.276,
+          "gamma": [
+            5.0,
+            0.2
+          ]
+        },
+        "Fe_X2": {
+          "log_k": 0.55,
+          "gamma": [
+            6.0,
+            0.2
+          ]
+        },
+        "Mn_X2": {
+          "log_k": 0.52,
+          "gamma": [
+            5.0,
+            0.2
+          ]
+        },
+        "Pb_X2": {
+          "log_k": 0.699,
+          "gamma": [
+            4.5,
+            0.2
+          ]
+        },
+        "Cd_X2": {
+          "log_k": 0.292,
+          "gamma": [
+            5.0,
+            0.2
+          ]
+        }
+      }
+    },
+    "SAC_12DVB": {
+      "description": "High crosslinked strong acid cation resin (12% DVB)",
+      "total_capacity_eq_L": 2.2,
+      "moisture_content": 0.42,
+      "reference": "High selectivity applications",
+      "exchange_species": {
+        "Na_X": {
+          "log_k": 0.0,
+          "reference": true,
+          "gamma": [
+            4.0,
+            0.075
+          ]
+        },
+        "Li_X": {
+          "log_k": -0.37,
+          "gamma": [
+            6.0,
+            0.0
+          ],
+          "notes": "Reduced swelling increases Li rejection"
+        },
+        "K_X": {
+          "log_k": 0.58,
+          "gamma": [
+            3.5,
+            0.015
+          ]
+        },
+        "Rb_X": {
+          "log_k": 0.6,
+          "gamma": [
+            3.0,
+            0.015
+          ]
+        },
+        "Cs_X": {
+          "log_k": 0.62,
+          "gamma": [
+            2.5,
+            0.0
+          ]
+        },
+        "NH4_X": {
+          "log_k": 0.48,
+          "gamma": [
+            3.0,
+            0.015
+          ]
+        },
+        "Ca_X2": {
+          "log_k": 0.82,
+          "gamma": [
+            5.0,
+            0.165
+          ]
+        },
+        "Mg_X2": {
+          "log_k": 0.58,
+          "gamma": [
+            5.5,
+            0.2
+          ]
+        },
+        "Sr_X2": {
+          "log_k": 0.95,
+          "gamma": [
+            5.0,
+            0.165
+          ]
+        },
+        "Ba_X2": {
+          "log_k": 1.22,
+          "gamma": [
+            5.0,
+            0.165
+          ]
+        }
+      }
+    },
+    "SAC_16DVB": {
+      "description": "Very high crosslinked strong acid cation resin (16% DVB)",
+      "total_capacity_eq_L": 2.3,
+      "moisture_content": 0.36,
+      "reference": "Special applications, size exclusion effects",
+      "exchange_species": {
+        "Na_X": {
+          "log_k": 0.0,
+          "reference": true,
+          "gamma": [
+            4.0,
+            0.075
+          ]
+        },
+        "Li_X": {
+          "log_k": -0.375,
+          "gamma": [
+            6.0,
+            0.0
+          ]
+        },
+        "K_X": {
+          "log_k": 0.278,
+          "gamma": [
+            3.5,
+            0.015
+          ],
+          "notes": "Significant increase with crosslinking"
+        },
+        "Rb_X": {
+          "log_k": 0.29,
+          "gamma": [
+            3.0,
+            0.015
+          ]
+        },
+        "Cs_X": {
+          "log_k": 0.294,
+          "gamma": [
+            2.5,
+            0.0
+          ]
+        },
+        "Ca_X2": {
+          "log_k": 0.487,
+          "gamma": [
+            5.0,
+            0.165
+          ]
+        },
+        "Mg_X2": {
+          "log_k": 0.171,
+          "gamma": [
+            5.5,
+            0.2
+          ],
+          "notes": "Lower increase due to hydration"
+        },
+        "Sr_X2": {
+          "log_k": 0.63,
+          "gamma": [
+            5.0,
+            0.165
+          ]
+        },
+        "Ba_X2": {
+          "log_k": 0.943,
+          "gamma": [
+            5.0,
+            0.165
+          ]
+        },
+        "Ag_X": {
+          "log_k": 0.985,
+          "gamma": [
+            2.5,
+            0.0
+          ],
+          "notes": "Very high selectivity at high DVB"
+        }
+      }
+    },
+    "WAC_Na": {
+      "description": "Weak acid cation resin, Na-form (acrylic/methacrylic)",
+      "total_capacity_eq_L": 4.0,
+      "pka": 4.8,
+      "moisture_content": 0.45,
+      "reference": "IRC-86, Amberlite IRC-50 type",
+      "exchange_species": {
+        "Na_X": {
+          "log_k": 0.0,
+          "reference": true,
+          "gamma": [
+            4.0,
+            0.075
+          ]
+        },
+        "H_X": {
+          "log_k": 4.8,
+          "notes": "pKa controls pH-dependent capacity",
+          "gamma": [
+            9.0,
+            0.0
+          ]
+        },
+        "K_X": {
+          "log_k": 0.25,
+          "gamma": [
+            3.5,
+            0.015
+          ]
+        },
+        "NH4_X": {
+          "log_k": 0.2,
+          "gamma": [
+            3.0,
+            0.015
+          ]
+        },
+        "Ca_X2": {
+          "log_k": 1.3,
+          "gamma": [
+            5.0,
+            0.165
+          ],
+          "notes": "High selectivity for divalents"
+        },
+        "Mg_X2": {
+          "log_k": 1.1,
+          "gamma": [
+            5.5,
+            0.2
+          ]
+        },
+        "Sr_X2": {
+          "log_k": 1.35,
+          "gamma": [
+            5.0,
+            0.165
+          ]
+        },
+        "Ba_X2": {
+          "log_k": 1.45,
+          "gamma": [
+            5.0,
+            0.165
+          ]
+        },
+        "Fe_X2": {
+          "log_k": 1.4,
+          "gamma": [
+            6.0,
+            0.2
+          ],
+          "notes": "Forms stable complexes"
+        },
+        "Mn_X2": {
+          "log_k": 1.15,
+          "gamma": [
+            5.0,
+            0.2
+          ]
+        },
+        "Cu_X2": {
+          "log_k": 1.6,
+          "gamma": [
+            5.0,
+            0.2
+          ],
+          "notes": "Chelation effects"
+        },
+        "Zn_X2": {
+          "log_k": 1.35,
+          "gamma": [
+            5.0,
+            0.2
+          ]
+        }
+      }
+    },
+    "WAC_H": {
+      "description": "Weak acid cation resin, H-form",
+      "total_capacity_eq_L": 4.0,
+      "pka": 4.8,
+      "moisture_content": 0.45,
+      "reference": "H-form for alkalinity removal",
+      "exchange_species": {
+        "H_X": {
+          "log_k": 0.0,
+          "reference": true,
+          "gamma": [
+            9.0,
+            0.0
+          ]
+        },
+        "Na_HX": {
+          "reaction": "Na+ + HX = NaX + H+",
+          "log_k": 0.5,
+          "gamma": [
+            4.0,
+            0.075
+          ]
+        },
+        "K_HX": {
+          "reaction": "K+ + HX = KX + H+",
+          "log_k": 0.7,
+          "gamma": [
+            3.5,
+            0.015
+          ]
+        },
+        "Ca_2HX": {
+          "reaction": "Ca+2 + 2HX = CaX2 + 2H+",
+          "log_k": 2.0,
+          "gamma": [
+            5.0,
+            0.165
+          ]
+        },
+        "Mg_2HX": {
+          "reaction": "Mg+2 + 2HX = MgX2 + 2H+",
+          "log_k": 1.8,
+          "gamma": [
+            5.5,
+            0.2
+          ]
+        }
+      }
+    }
+  },
+  "notes": {
+    "selectivity_trends": [
+      "Selectivity increases with DVB% for most ions",
+      "Li+ selectivity decreases with increasing DVB%",
+      "Divalent > monovalent selectivity increases with DVB%",
+      "Size exclusion effects significant above 12% DVB"
+    ],
+    "temperature_effects": [
+      "log_k decreases ~0.01-0.02 per \u00c2\u00b0C increase",
+      "Use -delta_h or -analytical_expression for T-dependence"
+    ],
+    "activity_coefficients": [
+      "gamma values: [a, b] for Debye-H\u00c3\u00bcckel equation",
+      "First value (a) typically 2.5-6.0, related to ion size",
+      "Second value (b) typically 0-0.2, ion-specific parameter"
+    ]
+  }
+}
