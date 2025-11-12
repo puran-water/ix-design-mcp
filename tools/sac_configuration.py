@@ -15,6 +15,13 @@ from pydantic import BaseModel, Field
 # Import centralized configuration
 from .core_config import CONFIG
 
+# Import knowledge-based configurator for performance calculations
+try:
+    from .knowledge_based_config import KnowledgeBasedConfigurator
+    KNOWLEDGE_BASED_AVAILABLE = True
+except ImportError:
+    KNOWLEDGE_BASED_AVAILABLE = False
+
 logger = logging.getLogger(__name__)
 
 
@@ -101,16 +108,44 @@ class SACVesselConfiguration(BaseModel):
     vessel_height_m: float
 
 
+class ServicePerformance(BaseModel):
+    """Service cycle performance metrics"""
+    breakthrough_BV: float = Field(..., description="Breakthrough in bed volumes")
+    run_length_hrs: float = Field(..., description="Service run duration in hours")
+    run_volume_m3: float = Field(..., description="Volume treated per cycle")
+    hardness_feed_mg_L: float = Field(..., description="Feed hardness as CaCO3")
+    hardness_leakage_mg_L: float = Field(..., description="Average hardness leakage")
+    operating_capacity_eq_L: float = Field(..., description="Operating exchange capacity")
+    utilization: float = Field(..., description="Bed utilization fraction")
+    LUB_fraction: float = Field(..., description="Length of unused bed fraction")
+    meets_target: bool = Field(..., description="Whether effluent meets target")
+    derating_factor: float = Field(..., description="Capacity derating factor")
+
+class RegenerationPerformance(BaseModel):
+    """Regeneration cycle parameters"""
+    chemical: str = Field(..., description="Regenerant chemical")
+    dose_g_L: float = Field(..., description="Regenerant dose per L resin")
+    concentration: str = Field(..., description="Regenerant concentration")
+    volume_BV: float = Field(..., description="Regenerant volume in bed volumes")
+    volume_m3: float = Field(..., description="Regenerant volume in m³")
+    rinse_volume_BV: float = Field(..., description="Rinse volume in bed volumes")
+    duration_hrs: float = Field(..., description="Total regeneration time")
+    efficiency: float = Field(..., description="Regeneration efficiency")
+    waste_volume_m3: float = Field(..., description="Total waste volume")
+
 class SACConfigurationOutput(BaseModel):
-    """Output from SAC configuration"""
+    """Output from SAC configuration with performance metrics"""
     vessel_configuration: SACVesselConfiguration
     water_analysis: SACWaterComposition
     target_hardness_mg_l_caco3: float
-    regeneration_parameters: Dict[str, Any]
+    service_performance: Optional[ServicePerformance] = Field(None, description="Service cycle performance")
+    regeneration_parameters: Dict[str, Any]  # Legacy format
+    regeneration_performance: Optional[RegenerationPerformance] = Field(None, description="Regeneration details")
     design_notes: List[str]
+    calculation_method: str = Field("hydraulic_only", description="Calculation method used")
 
 
-def configure_sac_vessel(input_data: SACConfigurationInput) -> SACConfigurationOutput:
+def configure_sac_vessel(input_data: SACConfigurationInput, use_knowledge_based: bool = True) -> SACConfigurationOutput:
     """
     Configure SAC vessel with hydraulic sizing only.
     
@@ -157,7 +192,17 @@ def configure_sac_vessel(input_data: SACConfigurationInput) -> SACConfigurationO
         diameter = math.ceil(diameter_original * 10) / 10  # Round up
         actual_area = math.pi * diameter**2 / 4
         design_notes.append(f"Diameter adjusted to {diameter} m to maintain linear velocity")
-    
+
+    # Check minimum velocity to prevent maldistribution
+    actual_linear_velocity = (water.flow_m3_hr / n_service) / actual_area
+    if actual_linear_velocity < CONFIG.MIN_LINEAR_VELOCITY_M_HR:
+        design_notes.append(
+            f"WARNING: Linear velocity ({actual_linear_velocity:.1f} m/h) below minimum "
+            f"({CONFIG.MIN_LINEAR_VELOCITY_M_HR} m/h). Risk of maldistribution. "
+            f"Consider: (1) Multiple smaller trains, (2) Shorter cycle time, or "
+            f"(3) Accept higher velocity if hydraulically feasible."
+        )
+
     # Calculate bed depth
     resin_volume_per_vessel = resin_volume_m3 / n_service
     bed_depth = max(
@@ -191,9 +236,69 @@ def configure_sac_vessel(input_data: SACConfigurationInput) -> SACConfigurationO
     logger.info(f"  - Bed volume: {bed_volume_L:.1f} L")
     logger.info(f"  - Linear velocity: {actual_linear_velocity:.1f} m/hr")
     
-    # NO CAPACITY OR COMPETITION CALCULATIONS HERE
-    # PHREEQC will determine actual operating capacity
-    
+    # Calculate performance metrics using knowledge-based approach if available
+    service_performance = None
+    regeneration_performance = None
+    calculation_method = "hydraulic_only"
+
+    if use_knowledge_based and KNOWLEDGE_BASED_AVAILABLE:
+        try:
+            configurator = KnowledgeBasedConfigurator()
+
+            # Convert water analysis to dict format for knowledge-based calc
+            water_dict = {
+                'flow_m3_hr': water.flow_m3_hr,
+                'ca_mg_l': water.ca_mg_l,
+                'mg_mg_l': water.mg_mg_l,
+                'na_mg_l': water.na_mg_l,
+                'flow_BV_hr': CONFIG.MAX_BED_VOLUME_PER_HOUR
+            }
+
+            # Get knowledge-based configuration with performance metrics
+            regen_dose_g_L = CONFIG.REGENERANT_DOSE_KG_M3  # Convert kg/m³ to g/L
+            kb_config = configurator.configure_sac_softening(
+                water_dict,
+                regen_dose_g_L=regen_dose_g_L,
+                target_hardness_mg_L=target_hardness
+            )
+
+            # Extract performance metrics
+            perf = kb_config['performance']
+            service_performance = ServicePerformance(
+                breakthrough_BV=perf['breakthrough_BV'],
+                run_length_hrs=perf['run_length_hrs'],
+                run_volume_m3=perf['run_volume_m3'],
+                hardness_feed_mg_L=perf['hardness_feed_mg_L'],
+                hardness_leakage_mg_L=perf['hardness_leakage_mg_L'],
+                operating_capacity_eq_L=perf['operating_capacity_eq_L'],
+                utilization=perf['utilization'],
+                LUB_fraction=perf['LUB_fraction'],
+                meets_target=perf['hardness_leakage_mg_L'] <= target_hardness,
+                derating_factor=perf['derating_factor']
+            )
+
+            # Extract regeneration metrics
+            regen = kb_config['regeneration']
+            regeneration_performance = RegenerationPerformance(
+                chemical=regen['chemical'],
+                dose_g_L=regen['dose_g_L'],
+                concentration=regen['concentration'],
+                volume_BV=regen['volume_BV'],
+                volume_m3=regen['volume_m3'],
+                rinse_volume_BV=regen['rinse_volume_BV'],
+                duration_hrs=regen['duration_hrs'],
+                efficiency=regen['efficiency'],
+                waste_volume_m3=regen['waste_volume_m3']
+            )
+
+            calculation_method = "knowledge_based"
+            design_notes.append("Performance calculated using knowledge-based correlations")
+            design_notes.append(f"Predicted hardness leakage: {perf['hardness_leakage_mg_L']:.1f} mg/L as CaCO3")
+
+        except Exception as e:
+            logger.warning(f"Knowledge-based calculation failed: {e}")
+            design_notes.append("Knowledge-based calculation unavailable - hydraulic sizing only")
+
     return SACConfigurationOutput(
         vessel_configuration=SACVesselConfiguration(
             resin_type="SAC",
@@ -208,6 +313,7 @@ def configure_sac_vessel(input_data: SACConfigurationInput) -> SACConfigurationO
         ),
         water_analysis=water,
         target_hardness_mg_l_caco3=target_hardness,
+        service_performance=service_performance,
         regeneration_parameters={
             "regenerant_type": "NaCl",
             "regenerant_dose_kg_m3": CONFIG.REGENERANT_DOSE_KG_M3,
@@ -215,5 +321,7 @@ def configure_sac_vessel(input_data: SACConfigurationInput) -> SACConfigurationO
             "rinse_volume_BV": CONFIG.RINSE_VOLUME_BV,
             "regenerant_flow_BV_hr": CONFIG.REGENERANT_FLOW_BV_HR
         },
-        design_notes=design_notes
+        regeneration_performance=regeneration_performance,
+        design_notes=design_notes,
+        calculation_method=calculation_method
     )
