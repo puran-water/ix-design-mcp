@@ -19,8 +19,8 @@ logger = logging.getLogger(__name__)
 def build_wac_surface_template(
     pka: float = 4.5,
     capacity_eq_l: float = 3.5,
-    ca_log_k: float = 1.0,
-    mg_log_k: float = 0.8,
+    ca_log_k: float = 4.0,
+    mg_log_k: float = 3.2,
     na_log_k: float = -0.5,  # Lower affinity than divalent
     k_log_k: float = -0.3,   # Slightly higher than Na
     cells: int = 10,
@@ -58,6 +58,12 @@ def build_wac_surface_template(
 
     if water_composition is None:
         water_composition = {}
+
+    # PHASE 2 DEBUG: Log input water composition
+    logger.info(f"[PHASE2-DEBUG] build_wac_surface_template called with:")
+    logger.info(f"[PHASE2-DEBUG] Water composition: {water_composition}")
+    logger.info(f"[PHASE2-DEBUG] Resin form: {resin_form}, Capacity: {capacity_eq_l} eq/L")
+    logger.info(f"[PHASE2-DEBUG] Cells: {cells}, Max BV: {max_bv}")
 
     # Calculate parameters
     # bed_volume_L * porosity gives water volume in L
@@ -118,6 +124,13 @@ SURFACE_SPECIES
     Wac_sO- + K+ = Wac_sOK
         log_k {k_log_k}
 
+# PHASE2 DEBUG: Log feed water values
+# Ca = {water_composition.get('ca_mg_l', 0)} mg/L
+# Mg = {water_composition.get('mg_mg_l', 0)} mg/L
+# Na = {water_composition.get('na_mg_l', 0)} mg/L
+# HCO3 = {water_composition.get('hco3_mg_l', 0)} mg/L
+# Cl = {water_composition.get('cl_mg_l', 0)} mg/L
+
 # Feed solution
 SOLUTION 0 Feed water
     temp      {water_composition.get('temperature_celsius', 25)}
@@ -139,12 +152,15 @@ SOLUTION 0 Feed water
         # Na-form: neutral pH with Na-loaded resin
         initial_ph = 7.0
         na_line = "    Na        500  # mg/L - represents Na-loaded resin\n"
+        hco3_line = ""
         cl_line = "    Cl        0 charge  # Use 0 to auto-balance\n"
     else:
-        # H-form: use feed pH or slightly acidic
-        initial_ph = water_composition.get('pH', 5.5)
-        na_line = ""
-        cl_line = "    Cl        1 charge\n"
+        # H-form: Start with feed water composition
+        # Will be handled by multi-stage workflow with CO2 venting
+        initial_ph = water_composition.get('pH', 7.0)
+        na_line = ""  # No Na buffer - avoid creating Na-form
+        hco3_line = ""
+        cl_line = "    Cl        0 charge  # Auto-balance\n"
 
     phreeqc_input += f"""
 # Initial column solution - {resin_form} form
@@ -152,7 +168,7 @@ SOLUTION 1-{cells} Initial column water
     units     mg/L
     temp      {water_composition.get('temperature_celsius', 25)}
     pH        {initial_ph}
-{na_line}{cl_line}    water     {water_per_cell_kg} kg
+{na_line}{hco3_line}{cl_line}    water     {water_per_cell_kg} kg
 """
 
     # Add SURFACE blocks for each cell
@@ -162,8 +178,16 @@ SURFACE {i}
     -sites_units absolute
     -no_edl  # No electrical double layer (simpler model)
     Wac_s {sites_per_cell} 1 1
-    -equilibrate solution {i}
 """
+
+    # Add CO2 equilibrium phases for H-form (prevents pH crash)
+    # DISABLED: CO2 equilibrium causing convergence issues
+    # if resin_form == 'H':
+    #     phreeqc_input += f"""
+    # # CO2 equilibrium phases (allows H+ + HCO3- -> CO2 venting)
+    # EQUILIBRIUM_PHASES 1-{cells}
+    #     CO2(g)    -3.5  # log P = -3.5 (400 ppm), no finite reservoir
+    # """
 
     # Add transport block
     phreeqc_input += f"""
@@ -193,13 +217,14 @@ SELECTED_OUTPUT 1
     -molalities H+ OH- CO2 HCO3- CO3-2
     -molalities Wac_sOH Wac_sO- (Wac_sO)2Ca (Wac_sO)2Mg Wac_sONa Wac_sOK
     -saturation_indices Calcite Aragonite Dolomite
+    -gas CO2(g)
 
 USER_PUNCH 1
-    -headings BV pH Ca_mg/L Mg_mg/L Hardness_mg/L Active_Sites_% Ca_Removal_%
+    -headings BV pH Ca_mg/L Mg_mg/L Hardness_mg/L H_Sites_% Ca_Sites_% Mg_Sites_% Na_Sites_% Free_Sites_% Ca_Removal_% Alk_mg/L CO2_mol/L
     -start
     10 REM Calculate bed volumes
     20 BV = STEP_NO * {water_per_cell_kg} / {bed_volume_L}
-    30 IF (STEP_NO <= 0) THEN GOTO 300
+    30 IF (STEP_NO <= 0) THEN GOTO 500
     40 PUNCH BV
     50 PUNCH -LA("H+")
 
@@ -212,31 +237,40 @@ USER_PUNCH 1
     110 hardness_caco3 = ca_mg * 2.5 + mg_mg * 4.1
     120 PUNCH hardness_caco3
 
-    130 REM Calculate active (deprotonated) sites percentage
-    140 wac_so_mol = MOL("Wac_sO-")
-    150 wac_soh_mol = MOL("Wac_sOH")
-    170 wac_ca_mol = MOL("(Wac_sO)2Ca")
-    180 wac_mg_mol = MOL("(Wac_sO)2Mg")
-    190 wac_na_mol = MOL("Wac_sONa")
-    200 wac_k_mol = MOL("Wac_sOK")
+    130 REM Calculate site distribution (enhanced monitoring)
+    140 wac_so_mol = MOL("Wac_sO-")  # Free deprotonated sites
+    150 wac_soh_mol = MOL("Wac_sOH")  # Protonated sites (inactive)
+    170 wac_ca_mol = MOL("(Wac_sO)2Ca")  # Ca-loaded sites
+    180 wac_mg_mol = MOL("(Wac_sO)2Mg")  # Mg-loaded sites
+    190 wac_na_mol = MOL("Wac_sONa")  # Na-loaded sites
+    200 wac_k_mol = MOL("Wac_sOK")  # K-loaded sites
 
     210 REM Total sites (note: Ca and Mg use 2 sites each)
     220 total_sites = wac_soh_mol + wac_so_mol
     230 total_sites = total_sites + 2*wac_ca_mol + 2*wac_mg_mol
     240 total_sites = total_sites + wac_na_mol + wac_k_mol
 
-    250 REM Active sites are those available for exchange (deprotonated)
-    260 active_sites = wac_so_mol + 2*wac_ca_mol + 2*wac_mg_mol + wac_na_mol + wac_k_mol
-    270 IF (total_sites > 0) THEN active_percent = (active_sites / total_sites) * 100 ELSE active_percent = 0
-    280 PUNCH active_percent
+    250 REM Calculate percentages for each state
+    260 IF (total_sites > 0) THEN h_percent = (wac_soh_mol / total_sites) * 100 ELSE h_percent = 0
+    270 IF (total_sites > 0) THEN ca_percent = (2*wac_ca_mol / total_sites) * 100 ELSE ca_percent = 0
+    280 IF (total_sites > 0) THEN mg_percent = (2*wac_mg_mol / total_sites) * 100 ELSE mg_percent = 0
+    290 IF (total_sites > 0) THEN na_percent = (wac_na_mol / total_sites) * 100 ELSE na_percent = 0
+    300 IF (total_sites > 0) THEN free_percent = (wac_so_mol / total_sites) * 100 ELSE free_percent = 0
 
-    290 REM Calculate Ca removal
-    300 feed_ca = {water_composition.get('ca_mg_l', 0)}
-    310 IF (feed_ca > 0) THEN ca_removal = (1 - ca_mg/feed_ca) * 100 ELSE ca_removal = 0
-    320 IF (ca_removal < 0) THEN ca_removal = 0
-    330 PUNCH ca_removal
+    310 PUNCH h_percent, ca_percent, mg_percent, na_percent, free_percent
 
-    400 REM end
+    320 REM Calculate Ca removal
+    330 feed_ca = {water_composition.get('ca_mg_l', 0)}
+    340 IF (feed_ca > 0) THEN ca_removal = (1 - ca_mg/feed_ca) * 100 ELSE ca_removal = 0
+    350 IF (ca_removal < 0) THEN ca_removal = 0
+    360 PUNCH ca_removal
+
+    370 REM Calculate alkalinity and CO2
+    380 alk_mg = TOT("C(4)") * 61.017 * 1000  # as HCO3
+    390 co2_mol = MOL("CO2")
+    400 PUNCH alk_mg, co2_mol
+
+    500 REM end
     -end
 
 END
@@ -244,6 +278,8 @@ END
 
     logger.info(f"Generated WAC SURFACE template with pKa={pka}, capacity={capacity_eq_l} eq/L")
     logger.info(f"At pH={pka}, expect 50% active sites (Henderson-Hasselbalch)")
+    logger.info(f"Water composition: Ca={water_composition.get('ca_mg_l', 0)}, Mg={water_composition.get('mg_mg_l', 0)}, "
+                f"Na={water_composition.get('na_mg_l', 0)}, HCO3={water_composition.get('hco3_mg_l', 0)}")
 
     return phreeqc_input
 

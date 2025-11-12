@@ -159,7 +159,7 @@ Add to `claude_desktop_config.json`:
   "schema_version": "1.0.0",
   "resin_type": "SAC",
   "water": {
-    "flow_m3h": 100,
+    "flow_m3_hr": 100,
     "ions_mg_l": {
       "Ca_2+": 120,
       "Mg_2+": 40,

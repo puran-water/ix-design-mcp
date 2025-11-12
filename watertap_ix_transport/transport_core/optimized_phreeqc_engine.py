@@ -47,8 +47,7 @@ class OptimizedPhreeqcEngine:
             max_workers: Max parallel workers (None = CPU count)
         """
         self.base_engine = DirectPhreeqcEngine(
-            phreeqc_path=phreeqc_path,
-            keep_temp_files=False
+            phreeqc_path=phreeqc_path
         )
         self.cache_size = cache_size
         self.max_workers = max_workers
@@ -238,7 +237,7 @@ class OptimizedPhreeqcEngine:
     ) -> Tuple[str, str]:
         """Run single simulation (for parallel execution)"""
         # Create new engine instance for process isolation
-        engine = DirectPhreeqcEngine(keep_temp_files=False)
+        engine = DirectPhreeqcEngine()
         return engine.run_phreeqc(input_string, database)
     
     def parse_selected_output(self, selected_string: str) -> List[Dict]:
