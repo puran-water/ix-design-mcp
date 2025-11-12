@@ -144,6 +144,8 @@ selected_output_*.sel
 # Test scripts (not needed for MCP server runtime)
 tests/*.py
 !tests/__init__.py
+!tests/test_pitzer_database.py
+!tests/test_charge_balance.py
 tests/debug/
 tests/regeneration_diagnostics/
 tests/fixtures/
