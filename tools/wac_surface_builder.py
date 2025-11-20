@@ -198,7 +198,9 @@ SOLUTION 1-{cells} Initial column water
         phreeqc_input += f"""
 SURFACE {i}
     -sites_units absolute
-    -no_edl  # No electrical double layer (simpler model)
+    -donnan  # Use Donnan model for proper charge balance (per PHREEQC docs)
+             # Counter-charge resides in diffuse layer, not bulk solution
+             # Improves convergence with high surface charge (Codex session 019aa2b9-d23b)
     Wac_s {sites_per_cell} 1 1
 """
 
@@ -224,12 +226,29 @@ SURFACE {i}
 # Step 1: Pre-equilibrate resin in Na-form with feed water (sets ionic strength)
 # Step 2: Gradual H-form conversion via mild HCl additions (1-2 steps)
 
-# Step 1: Equilibrate Na-form resin with feed water
-# This establishes ionic strength without dumping H+ into solution
+# Step 1: Equilibrate Na-form resin with feed water (pH ALLOWED TO FLOAT)
+# ============================================================================
+# CRITICAL: pH Control and Charge Balance
+# ----------------------------------------
+# When WAC H-form resin contacts high-pH water, deprotonation releases massive H+:
+#   - At pH 7.8 with pKa 4.8: ~99.9% of sites deprotonate (Henderson-Hasselbalch)
+#   - For ~18,000 mol sites: ~17,840 mol H+ released into solution
+#   - This naturally acidifies solution to pH ~2-4 (thermodynamic equilibrium)
+#
+# Using Fix_pH to maintain pH 7.8 creates IMPOSSIBLE thermodynamic state:
+#   - Would require ~18,000 mol NaOH to neutralize all H+
+#   - Without sufficient base, Newton solver cannot converge (charge deficit)
+#   - Reference: Codex session 019aa2b9-d23b, PHREEQC doc/RELEASE.TXT, mytest/zeta.out
+#
+# SOLUTION: Let pH float during initialization
+#   - Released H+ self-limits deprotonation via Le Chatelier's principle
+#   - System reaches solvable equilibrium at pH ~2-4
+#   - Donnan layer (below) handles surface charge properly
+#   - Matches commercial WAC H-form operation (effluent pH crashes until neutralized)
+# ============================================================================
 USE solution 0  # Feed water
 USE surface {' '.join(str(i) for i in range(1, cells+1))}
-EQUILIBRIUM_PHASES 1-{cells}
-    Fix_pH  -{water_composition.get('pH', 7.8)}  NaOH  10.0  # Maintain feed pH during equilibration
+# NO EQUILIBRIUM_PHASES - pH allowed to float to thermodynamic equilibrium
 END
 
 # Step 2a: First mild HCl addition (partial H-form conversion)
