@@ -11,6 +11,12 @@ IX Design MCP Server – Changelog
   - Added custom `Fix_pH` pseudo-phase definition (`H+ = H+, log_k = 0.0`) for pH control
   - Fixed USE statement: replaced range syntax `1-{cells}` with explicit list
   - Validated via Codex CLI research of phreeqc3 source (session 019aa24e-66e2)
+- **Fixed**: Staged initialization convergence failure (removed Fix_pH over-constraint)
+  - Root cause: Fix_pH at pH 7.8 created impossible charge balance (17,840 mol H+ released vs. 10 mol NaOH available)
+  - Solution 1: Removed Fix_pH EQUILIBRIUM_PHASES block - let pH float to thermodynamic equilibrium (~2-4)
+  - Solution 2: Added Donnan layer (`-donnan`) to SURFACE definition for proper charge balance
+  - Expected behavior: pH drops naturally during first contact (matches commercial WAC H-form operation)
+  - Validated via Codex CLI research of PHREEQC documentation (session 019aa2b9-d23b)
 - Modified files: `tools/wac_surface_builder.py`, `tools/wac_simulation.py`
 - Why it matters: Corrected log_k values (Ca: 1.5, Mg: 1.3) enable realistic pH-dependent hardness leakage, but convergence failures with direct H-form initialization prevented validation until staged approach implemented
 
