@@ -94,9 +94,10 @@ def build_wac_surface_template(
     # Add KNOBS for better convergence (especially for high TDS + H-form)
     phreeqc_input += """
 KNOBS
-    -itmax 800               # Increase max iterations from 100 to 800
-    -tolerance 1e-12         # Tighter convergence tolerance
-    -damp 0.5                # Damping factor for stability
+    -iterations 800          # Increase max iterations from default 100
+    -convergence_tolerance 1e-12  # Tighter than default (1e-8)
+    -step_size 10            # Reduce from default 100 for stability
+    -pe_step_size 2          # Reduce from default 10
     -numerical_derivatives true  # Improve Donnan math stability
 
 """
@@ -138,6 +139,12 @@ SURFACE_SPECIES
 
     Wac_sO- + K+ = Wac_sOK
         log_k {k_log_k}
+
+# Custom pseudo-phase for pH control during staged initialization
+PHASES
+Fix_pH
+    H+ = H+
+    log_k  0.0
 
 # PHASE2 DEBUG: Log feed water values
 # Ca = {water_composition.get('ca_mg_l', 0)} mg/L
@@ -220,9 +227,9 @@ SURFACE {i}
 # Step 1: Equilibrate Na-form resin with feed water
 # This establishes ionic strength without dumping H+ into solution
 USE solution 0  # Feed water
-USE surface 1-{cells}
+USE surface {' '.join(str(i) for i in range(1, cells+1))}
 EQUILIBRIUM_PHASES 1-{cells}
-    Fix_H+  -7.8  NaOH  10.0  # Maintain feed pH during equilibration
+    Fix_pH  -{water_composition.get('pH', 7.8)}  NaOH  10.0  # Maintain feed pH during equilibration
 END
 
 # Step 2a: First mild HCl addition (partial H-form conversion)
