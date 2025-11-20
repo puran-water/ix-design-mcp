@@ -1,16 +1,16 @@
 IX Design MCP Server – Changelog
 
-2.2.0 – 2025-11-20 (IN PROGRESS - BLOCKED)
+2.2.0 – 2025-11-20
 - **CRITICAL**: Implemented staged initialization for WAC H-form to fix convergence failures with corrected log_k values
   - Root cause: Direct H-form initialization dumps massive proton load into high-TDS brine → extreme charge imbalance
   - Solution: Pre-equilibrate in Na-form, then gradually convert to H-form via mild HCl additions (pH 3.0 → 2.5)
   - Added `initialization_mode` parameter to `build_wac_surface_template()` ('direct' or 'staged')
   - Automatic detection: Staged mode activated for high-TDS water (>10 g/L) requiring Pitzer database
-- **BLOCKED**: Pitzer database compatibility issues prevent validation
-  - KNOBS parameters (`-itmax 800`, `-damp 0.5`) not recognized by Pitzer database
-  - `Fix_H+` phase doesn't exist in Pitzer database (used for pH control during staged initialization)
-  - USE statement range syntax (`1-10`) causes warnings with Pitzer
-  - See CURRENT_TASK.md for detailed fix plan
+- **Fixed**: PHREEQC syntax errors in staged initialization template (validated against upstream source)
+  - Corrected KNOBS parameters: `-itmax` → `-iterations`, `-damp` → `-step_size`
+  - Added custom `Fix_pH` pseudo-phase definition (`H+ = H+, log_k = 0.0`) for pH control
+  - Fixed USE statement: replaced range syntax `1-{cells}` with explicit list
+  - Validated via Codex CLI research of phreeqc3 source (session 019aa24e-66e2)
 - Modified files: `tools/wac_surface_builder.py`, `tools/wac_simulation.py`
 - Why it matters: Corrected log_k values (Ca: 1.5, Mg: 1.3) enable realistic pH-dependent hardness leakage, but convergence failures with direct H-form initialization prevented validation until staged approach implemented
 
