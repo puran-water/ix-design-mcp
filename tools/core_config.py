@@ -91,10 +91,10 @@ class CoreConfig:
     WAC_LOGK_H_NA: float = 3.0      # H/Na selectivity for WAC (H+ >> all other cations)
     
     # WAC H-form selectivity (HX is reference, log_k = 0.0)
-    WAC_LOGK_CA_H: float = 2.0      # Ca+2 + 2HX = CaX2 + 2H+
-    WAC_LOGK_MG_H: float = 1.8      # Mg+2 + 2HX = MgX2 + 2H+
-    WAC_LOGK_NA_H: float = 0.5      # Na+ + HX = NaX + H+
-    WAC_LOGK_K_H: float = 0.7       # K+ + HX = KX + H+
+    WAC_LOGK_CA_H: float = 1.5      # Ca+2 binding to deprotonated sites (SURFACE model)
+    WAC_LOGK_MG_H: float = 1.3      # Mg+2 binding to deprotonated sites (SURFACE model)
+    WAC_LOGK_NA_H: float = -0.5     # Na+ weakly binds to deprotonated sites
+    WAC_LOGK_K_H: float = -0.3      # K+ weakly binds to deprotonated sites
     
     # WAC regeneration parameters
     WAC_ACID_DOSE_G_L: float = 100.0   # Acid dose for WAC regeneration (g/L resin)
@@ -156,6 +156,11 @@ class CoreConfig:
     DEFAULT_CELLS: int = 8  # Number of cells for column discretization
     DEFAULT_MAX_BV: int = 200  # Maximum bed volumes to simulate
 
+    # Dynamic BV calculation safety limits
+    # These are EXTREME safety caps for pathological bugs only - NOT operational limits
+    # Normal simulations run to completion via JobManager; users can terminate if too slow
+    MAX_SIMULATION_BV: int = 10000  # Extreme safety cap (should never be hit in practice)
+
     # PHREEQC database selection
     PHREEQC_DATABASE_NAME: str = "phreeqc.dat"  # Options: phreeqc.dat | pitzer.dat | sit.dat
     HIGH_TDS_THRESHOLD_G_L: float = 10.0  # TDS threshold for Pitzer database recommendation
@@ -204,22 +209,13 @@ class CoreConfig:
         if db_name is None:
             db_name = self.PHREEQC_DATABASE_NAME
 
-        # 1. Check environment variable
+        # 1. Check environment variable (highest priority)
         env_path = os.getenv('PHREEQC_DATABASE')
         if env_path and os.path.exists(env_path):
+            logger.debug(f"Using PHREEQC database from PHREEQC_DATABASE env: {env_path}")
             return Path(env_path)
 
-        # 2. Check virtual environment (phreeqpython package)
-        try:
-            import phreeqpython
-            phreeqpy_db = Path(phreeqpython.__file__).parent / "database" / db_name
-            if phreeqpy_db.exists():
-                logger.debug(f"Using PHREEQC database from phreeqpython: {phreeqpy_db}")
-                return phreeqpy_db
-        except ImportError:
-            pass
-
-        # 3. Try common system installation locations
+        # 2. Try common system installation locations (fast path - check before importing phreeqpython)
         common_dirs = [
             r"C:\Program Files\USGS\phreeqc-3.8.6-17100-x64\database",
             r"C:\Program Files\USGS\phreeqc-3.8.6-17096-x64\database",
@@ -233,10 +229,23 @@ class CoreConfig:
         for dir_path in common_dirs:
             full_path = Path(dir_path) / db_name
             if full_path.exists():
+                logger.debug(f"Using PHREEQC database from system path: {full_path}")
                 return full_path
 
+        # 3. Fall back to phreeqpython package (SLOW - only use if system paths not found)
+        logger.warning("PHREEQC database not found in system paths, falling back to phreeqpython import (may be slow)")
+        try:
+            import phreeqpython
+            phreeqpy_db = Path(phreeqpython.__file__).parent / "database" / db_name
+            if phreeqpy_db.exists():
+                logger.debug(f"Using PHREEQC database from phreeqpython: {phreeqpy_db}")
+                return phreeqpy_db
+        except ImportError:
+            logger.warning("phreeqpython not available and database not found in system paths")
+            pass
+
         # Return default path (may not exist - caller should handle)
-        logger.warning(f"Database {db_name} not found in standard locations")
+        logger.warning(f"Database {db_name} not found in any location, returning default")
         return Path(common_dirs[0]) / db_name
     
     def get_equiv_weight(self, ion: str) -> float:
