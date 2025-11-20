@@ -17,12 +17,12 @@ logger = logging.getLogger(__name__)
 
 
 def build_wac_surface_template(
-    pka: float = 4.5,
-    capacity_eq_l: float = 3.5,
-    ca_log_k: float = 4.0,
-    mg_log_k: float = 3.2,
-    na_log_k: float = -0.5,  # Lower affinity than divalent
-    k_log_k: float = -0.3,   # Slightly higher than Na
+    pka: float = 4.8,           # Match CONFIG.WAC_PKA
+    capacity_eq_l: float = 4.7, # Match CONFIG.WAC_H_TOTAL_CAPACITY
+    ca_log_k: float = 1.5,      # Match CONFIG.WAC_LOGK_CA_H
+    mg_log_k: float = 1.3,      # Match CONFIG.WAC_LOGK_MG_H
+    na_log_k: float = -0.5,     # Match CONFIG.WAC_LOGK_NA_H
+    k_log_k: float = -0.3,      # Match CONFIG.WAC_LOGK_K_H
     cells: int = 10,
     water_composition: Optional[Dict[str, float]] = None,
     bed_volume_L: float = 1.0,
@@ -31,7 +31,8 @@ def build_wac_surface_template(
     flow_rate_m3_hr: float = 0.1,
     max_bv: int = 300,
     database_path: str = None,
-    resin_form: str = "Na"  # "Na" for sodium form, "H" for hydrogen form
+    resin_form: str = "Na",  # "Na" for sodium form, "H" for hydrogen form
+    initialization_mode: str = "direct"  # "direct" or "staged" (staged recommended for high TDS + H-form)
 ) -> str:
     """
     Build SURFACE-based WAC template with correct acid-base chemistry.
@@ -51,6 +52,9 @@ def build_wac_surface_template(
         flow_rate_m3_hr: Flow rate in m³/hr
         max_bv: Maximum bed volumes to simulate
         database_path: Path to PHREEQC database file
+        resin_form: Initial resin form - "Na" or "H"
+        initialization_mode: "direct" (immediate H-form) or "staged" (gradual Na→H conversion)
+                             Staged mode recommended for high-TDS water + H-form to avoid convergence failure
 
     Returns:
         Complete PHREEQC input string with SURFACE complexation model
@@ -87,10 +91,21 @@ def build_wac_surface_template(
     if database_path:
         phreeqc_input += f"DATABASE {database_path}\n"
 
+    # Add KNOBS for better convergence (especially for high TDS + H-form)
+    phreeqc_input += """
+KNOBS
+    -itmax 800               # Increase max iterations from 100 to 800
+    -tolerance 1e-12         # Tighter convergence tolerance
+    -damp 0.5                # Damping factor for stability
+    -numerical_derivatives true  # Improve Donnan math stability
+
+"""
+
     phreeqc_input += f"""
 TITLE WAC Simulation - SURFACE Complexation Model (pH-dependent capacity)
 # Correct implementation using acid-base equilibrium
 # Capacity follows Henderson-Hasselbalch: α = 1/(1 + 10^(pKa - pH))
+# Initialization mode: {initialization_mode}
 
 # Define surface master species for WAC sites
 SURFACE_MASTER_SPECIES
@@ -189,6 +204,53 @@ SURFACE {i}
     #     CO2(g)    -3.5  # log P = -3.5 (400 ppm), no finite reservoir
     # """
 
+    # Staged initialization for H-form (recommended for high-TDS water)
+    # Avoids massive H+ release that causes convergence failure
+    if initialization_mode == 'staged' and resin_form == 'H':
+        logger.info("Using staged initialization: Na-form → H-form conversion before transport")
+
+        phreeqc_input += f"""
+# ========================================
+# STAGED INITIALIZATION (Na-form → H-form)
+# ========================================
+# Avoids massive proton release that causes convergence failure in high-TDS water
+# Step 1: Pre-equilibrate resin in Na-form with feed water (sets ionic strength)
+# Step 2: Gradual H-form conversion via mild HCl additions (1-2 steps)
+
+# Step 1: Equilibrate Na-form resin with feed water
+# This establishes ionic strength without dumping H+ into solution
+USE solution 0  # Feed water
+USE surface 1-{cells}
+EQUILIBRIUM_PHASES 1-{cells}
+    Fix_H+  -7.8  NaOH  10.0  # Maintain feed pH during equilibration
+END
+
+# Step 2a: First mild HCl addition (partial H-form conversion)
+# Add small amount of acid to begin converting Na-form → H-form
+SOLUTION 100 Mild HCl step 1
+    pH    3.0  charge  # Mild acid, not extreme
+    Cl    0.01  # Small HCl addition (10 mM)
+    water {water_per_cell_kg} kg
+
+USE solution 100
+USE surface 1-{cells}
+END
+
+# Step 2b: Second mild HCl addition (complete H-form conversion)
+# Final conversion to H-form before transport begins
+SOLUTION 101 Mild HCl step 2
+    pH    2.5  charge  # Slightly stronger, still controlled
+    Cl    0.02  # Moderate HCl addition (20 mM)
+    water {water_per_cell_kg} kg
+
+USE solution 101
+USE surface 1-{cells}
+END
+
+# Now resin is in H-form, ready for transport with feed water
+# ========================================
+"""
+
     # Add transport block
     phreeqc_input += f"""
 # Transport simulation
@@ -220,7 +282,7 @@ SELECTED_OUTPUT 1
     -gas CO2(g)
 
 USER_PUNCH 1
-    -headings BV pH Ca_mg/L Mg_mg/L Hardness_mg/L H_Sites_% Ca_Sites_% Mg_Sites_% Na_Sites_% Free_Sites_% Ca_Removal_% Alk_mg/L CO2_mol/L
+    -headings BV pH Ca_mg/L Mg_mg/L Hardness_mg/L H_Sites_% Ca_Sites_% Mg_Sites_% Na_Sites_% Free_Sites_% Ca_Removal_% Alk_mg/L_CaCO3 CO2_mol/L
     -start
     10 REM Calculate bed volumes
     20 BV = STEP_NO * {water_per_cell_kg} / {bed_volume_L}
@@ -265,10 +327,10 @@ USER_PUNCH 1
     350 IF (ca_removal < 0) THEN ca_removal = 0
     360 PUNCH ca_removal
 
-    370 REM Calculate alkalinity and CO2
-    380 alk_mg = TOT("C(4)") * 61.017 * 1000  # as HCO3
+    370 REM Calculate alkalinity (using PHREEQC ALK function) and CO2
+    380 alk_caco3 = ALK * 50000  # mg/L as CaCO3 (ALK is eq/kgw)
     390 co2_mol = MOL("CO2")
-    400 PUNCH alk_mg, co2_mol
+    400 PUNCH alk_caco3, co2_mol
 
     500 REM end
     -end

@@ -843,6 +843,10 @@ async def simulate_ix_watertap(simulation_input: str) -> Dict[str, Any]:
         Dict with IXSimulationResult containing performance metrics,
         economic analysis, breakthrough curves, and artifacts,
         or error dict with status and troubleshooting hints.
+
+    Returns job_id immediately. Use get_job_status() to check progress and get_job_results() to retrieve results.
+
+    IMPORTANT: This tool now runs in background. Do NOT wait for results - use get_job_status(job_id) instead.
     """
     try:
         # Validate input size
@@ -852,50 +856,168 @@ async def simulate_ix_watertap(simulation_input: str) -> Dict[str, Any]:
                 "error": "Request too large",
                 "details": f"Request size exceeds maximum {MAX_REQUEST_SIZE} bytes"
             }
-        
-        import asyncio
+
         import json
-        from tools.simulate_ix_hybrid import simulate_ix_hybrid
-        
+        import uuid
+        from utils.job_manager import JobManager
+
         # Parse input
         input_data = json.loads(simulation_input)
-        
+
         # Set engine to hybrid if not specified
         if "engine" not in input_data:
             input_data["engine"] = "watertap_hybrid"
-        
-        # Control artifact writing via env to test WSL file I/O impact
-        write_artifacts_env = os.environ.get('MCP_WRITE_ARTIFACTS', '1').lower()
-        write_artifacts = write_artifacts_env not in ('0', 'false', 'no')
 
-        # Run hybrid simulation in thread pool
-        loop = asyncio.get_event_loop()
-        timeout_seconds = int(os.environ.get('MCP_SIMULATION_TIMEOUT_S', '600'))  # 10 minutes
-        logger.info(f"Hybrid IX simulation starting with timeout: {timeout_seconds} seconds (engine: {input_data.get('engine', 'watertap_hybrid')})")
-        
-        try:
-            result = await asyncio.wait_for(
-                loop.run_in_executor(HYBRID_EXECUTOR, simulate_ix_hybrid, input_data, write_artifacts),
-                timeout=timeout_seconds
-            )
-            return result
-        except asyncio.TimeoutError:
-            return {
-                "status": "timeout",
-                "error": "Hybrid simulation timeout",
-                "details": f"Simulation exceeded {timeout_seconds} second timeout",
-                "suggestions": "Consider simplifying water chemistry or using PHREEQC-only mode"
-            }
-        
+        # Generate job_id and create directory
+        job_id = str(uuid.uuid4())[:8]
+        job_dir = Path("jobs") / job_id
+
+        # Ensure parent jobs/ directory exists
+        Path("jobs").mkdir(exist_ok=True)
+
+        # Create job directory for input files
+        job_dir.mkdir(parents=True, exist_ok=True)
+
+        # Write input to job directory
+        input_path = job_dir / "input.json"
+        with open(input_path, "w") as f:
+            json.dump(input_data, f, indent=2)
+
+        # Build command for CLI wrapper
+        cmd = [
+            sys.executable,
+            "utils/simulate_ix_cli.py",
+            "--input", str(input_path),
+            "--output-dir", str(job_dir),
+            "--output", "results.json"
+        ]
+
+        # Execute in background with pre-created job_id
+        manager = JobManager()
+        job = await manager.execute(cmd=cmd, cwd=".", job_id=job_id)
+
+        resin_type = input_data.get('resin_type', 'SAC')
+        logger.info(f"IX simulation job started: {job_id} (resin: {resin_type})")
+
+        return {
+            "job_id": job["id"],
+            "status": job["status"],
+            "message": f"IX simulation job started ({resin_type}). Use get_job_status() to monitor progress.",
+            "resin_type": resin_type,
+            "next_steps": [
+                f"Check status: get_job_status('{job['id']}')",
+                f"Get results: get_job_results('{job['id']}')"
+            ]
+        }
+
     except Exception as e:
-        logger.error(f"Hybrid simulation failed: {e}")
+        logger.error(f"Failed to start IX simulation: {e}")
         return {
             "status": "error",
             "error": str(e),
-            "details": "Hybrid simulation failed. Check WaterTAP installation."
+            "details": "Failed to start IX simulation job."
         }
 
-# Tools are already registered via decorators above
+# ==============================================================================
+# BACKGROUND JOB MANAGEMENT TOOLS
+# ==============================================================================
+
+@mcp.tool(
+    description="""
+    Get status of a background IX simulation job.
+
+    Args:
+        job_id: Job identifier returned by simulate_ix_watertap
+
+    Returns:
+        Dict with job_id, status ("starting", "running", "completed", "failed"),
+        elapsed_time, and progress hints
+    """
+)
+async def get_job_status(job_id: str) -> Dict[str, Any]:
+    """Get status of a background job."""
+    from utils.job_manager import JobManager
+    manager = JobManager()
+    return await manager.get_status(job_id)
+
+
+@mcp.tool(
+    description="""
+    Get results from a completed IX simulation job.
+
+    Args:
+        job_id: Job identifier
+
+    Returns:
+        Dict with job_id, status, results (performance, economics, ion_tracking, etc.),
+        and log file paths. Returns error if job is not completed.
+    """
+)
+async def get_job_results(job_id: str) -> Dict[str, Any]:
+    """Get results from a completed background job."""
+    from utils.job_manager import JobManager
+    manager = JobManager()
+    return await manager.get_results(job_id)
+
+
+@mcp.tool(
+    description="""
+    Get breakthrough curve data from a completed IX simulation job.
+
+    Breakthrough data is excluded from get_job_results() to avoid token limits.
+    Use this tool to retrieve the full breakthrough curve when needed for plotting.
+
+    Args:
+        job_id: Job identifier from simulate_ix_watertap
+
+    Returns:
+        Dict with breakthrough_data (BV, pH, hardness, ions vs bed volumes).
+        Returns error if job not found, not completed, or has no breakthrough data.
+    """
+)
+async def get_breakthrough_data(job_id: str) -> Dict[str, Any]:
+    """Get breakthrough curve data from a completed simulation job."""
+    from utils.job_manager import JobManager
+    manager = JobManager()
+    return await manager.get_breakthrough_data(job_id)
+
+
+@mcp.tool(
+    description="""
+    List all background IX simulation jobs with optional status filter.
+
+    Args:
+        status_filter: Filter by status ("running", "completed", "failed", or None for all)
+        limit: Maximum number of jobs to return (default: 20)
+
+    Returns:
+        Dict with jobs list, total count, running jobs count, and max concurrent limit
+    """
+)
+async def list_jobs(status_filter: str = None, limit: int = 20) -> Dict[str, Any]:
+    """List all background jobs with optional status filter."""
+    from utils.job_manager import JobManager
+    manager = JobManager()
+    return await manager.list_jobs(status_filter, limit)
+
+
+@mcp.tool(
+    description="""
+    Terminate a running IX simulation job.
+
+    Args:
+        job_id: Job identifier
+
+    Returns:
+        Dict with termination status and message
+    """
+)
+async def terminate_job(job_id: str) -> Dict[str, Any]:
+    """Terminate a running background job."""
+    from utils.job_manager import JobManager
+    manager = JobManager()
+    return await manager.terminate_job(job_id)
+
 
 # Main entry point
 def main():
@@ -912,11 +1034,19 @@ def main():
     
     # Log available tools
     logger.info("Available tools:")
-    logger.info("  - configure_sac_ix: SAC vessel hydraulic sizing")
-    logger.info("  - configure_wac_ix: WAC vessel hydraulic sizing (Na-form or H-form)")
-    logger.info("  - simulate_ix_watertap: Unified simulation with PHREEQC chemistry + WaterTAP costing")
+    logger.info("  Design Tools:")
+    logger.info("    - configure_sac_ix: SAC vessel hydraulic sizing")
+    logger.info("    - configure_wac_ix: WAC vessel hydraulic sizing (Na-form or H-form)")
+    logger.info("    - simulate_ix_watertap: Unified simulation (runs in background)")
+    logger.info("  Job Management Tools:")
+    logger.info("    - get_job_status: Check status of background job")
+    logger.info("    - get_job_results: Retrieve results from completed job")
+    logger.info("    - get_breakthrough_data: Get breakthrough curve data")
+    logger.info("    - list_jobs: List all background jobs")
+    logger.info("    - terminate_job: Stop a running background job")
     if NOTEBOOK_RUNNER_AVAILABLE:
-        logger.info("  - run_sac_notebook_analysis: Integrated analysis with Jupyter notebook (optional)")
+        logger.info("  Optional:")
+        logger.info("    - run_sac_notebook_analysis: Integrated analysis with Jupyter notebook")
     
     # Log timeout configuration
     phreeqc_timeout = int(os.environ.get('PHREEQC_RUN_TIMEOUT_S', '600'))

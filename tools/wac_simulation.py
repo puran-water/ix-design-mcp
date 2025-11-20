@@ -35,8 +35,7 @@ from tools.base_ix_simulation import BaseIXSimulation
 
 # Import WAC templates
 from watertap_ix_transport.transport_core.wac_templates import (
-    create_wac_na_phreeqc_input,
-    create_wac_h_phreeqc_input
+    create_wac_na_phreeqc_input
 )
 
 # Import regeneration configuration
@@ -47,6 +46,7 @@ from tools.sac_configuration import SACWaterComposition, SACVesselConfiguration
 
 # Import centralized configuration
 from tools.core_config import CONFIG
+from tools.wac_surface_builder import build_wac_surface_template
 
 logger = logging.getLogger(__name__)
 
@@ -1168,10 +1168,14 @@ class WacNaSimulation(BaseWACSimulation):
         # Calculate performance metrics
         performance_metrics = self._calculate_performance_metrics(breakthrough_data, water, breakthrough_bv)
         
-        # Calculate capacity utilization
+        # Calculate capacity utilization with correct unit conversions
+        # theoretical_capacity: eq/L × L = eq
         theoretical_capacity = CONFIG.WAC_NA_WORKING_CAPACITY * vessel.bed_volume_L
-        feed_hardness_eq = (water.ca_mg_l / CONFIG.CA_EQUIV_WEIGHT + 
-                           water.mg_mg_l / CONFIG.MG_EQUIV_WEIGHT) * flow_rate_m3_hr * service_time_hours
+        # feed_hardness: (mg/L ÷ mg/meq) = meq/L, × (m³/hr × hr × 1000 L/m³) = meq, ÷ 1000 = eq
+        feed_hardness_meq_L = (water.ca_mg_l / CONFIG.CA_EQUIV_WEIGHT +
+                              water.mg_mg_l / CONFIG.MG_EQUIV_WEIGHT)  # meq/L
+        volume_treated_L = flow_rate_m3_hr * 1000 * service_time_hours  # L
+        feed_hardness_eq = (feed_hardness_meq_L / 1000) * volume_treated_L  # eq
         capacity_utilization = (feed_hardness_eq / theoretical_capacity * 100) if theoretical_capacity > 0 else 0
         
         # Apply smart sampling to reduce data size
@@ -1373,32 +1377,61 @@ class WacHSimulation(BaseWACSimulation):
 
         # Validate water composition
         self._validate_water_composition(water.model_dump())
-        
+
         # Calculate dynamic max_bv based on alkalinity loading (H-form primarily removes alkalinity)
         alkalinity_meq_L = water.hco3_mg_l / CONFIG.HCO3_EQUIV_WEIGHT
-        
+
         # Calculate max_bv for WAC_H based on alkalinity loading
         # Using TOTAL capacity since that's what the SURFACE model uses
         max_bv = self._calculate_dynamic_max_bv(
             loading_meq_L=alkalinity_meq_L,
             capacity_eq_L=CONFIG.WAC_H_TOTAL_CAPACITY,  # 4.7 eq/L - matches SURFACE model
-            buffer_factor=1.2,
+            buffer_factor=5.0,  # Provide ample window so H-form breakthrough is captured
             min_bv=200
         )
-        
+
         logger.info(f"Dynamic max_bv calculated: {max_bv} (alkalinity loading: {alkalinity_meq_L:.2f} meq/L)")
-        
-        # Create PHREEQC input with dynamic max_bv
-        # Use standard cell count for proper breakthrough front resolution
+
+        # Automatically use Pitzer database for high-TDS water to ensure PHREEQC convergence
+        if requires_pitzer:
+            phreeqc_db_path = str(CONFIG.get_phreeqc_database('pitzer.dat'))
+        else:
+            phreeqc_db_path = str(CONFIG.get_phreeqc_database())
+
+        # Create PHREEQC input with SURFACE-based chemistry for proper pH dependence
         wac_h_cells = CONFIG.DEFAULT_CELLS  # Use 10 cells for better front tracking
-        phreeqc_input = create_wac_h_phreeqc_input(
-            water_composition=water.model_dump(),
-            vessel_config=vessel.model_dump(),
+        vessel_dict = vessel.model_dump()
+        capacity_factor = vessel_dict.get('capacity_factor', getattr(vessel, 'capacity_factor', 1.0))
+        capacity_eq_l = CONFIG.WAC_H_TOTAL_CAPACITY * capacity_factor
+        bed_porosity = vessel_dict.get('bed_porosity', CONFIG.BED_POROSITY)
+
+        water_dict = water.model_dump()
+        if 'pH' not in water_dict:
+            default_ph = getattr(water, 'ph', 7.5)
+            water_dict['pH'] = water_dict.get('ph', default_ph)
+
+        # Use staged initialization for high-TDS water to avoid convergence failures
+        init_mode = 'staged' if requires_pitzer else 'direct'
+        if requires_pitzer:
+            logger.info(f"Using staged initialization mode for high-TDS water (TDS: {tds_g_l:.1f} g/L)")
+
+        phreeqc_input = build_wac_surface_template(
+            pka=CONFIG.WAC_PKA,
+            capacity_eq_l=capacity_eq_l,
+            ca_log_k=CONFIG.WAC_LOGK_CA_H,
+            mg_log_k=CONFIG.WAC_LOGK_MG_H,
+            na_log_k=CONFIG.WAC_LOGK_NA_H,
+            k_log_k=CONFIG.WAC_LOGK_K_H,
             cells=wac_h_cells,
+            water_composition=water_dict,
+            bed_volume_L=vessel.bed_volume_L,
+            bed_depth_m=vessel.bed_depth_m,
+            porosity=bed_porosity,
+            flow_rate_m3_hr=flow_per_vessel_m3_hr,
             max_bv=max_bv,
-            enable_enhancements=CONFIG.ENABLE_IONIC_STRENGTH_CORRECTION or CONFIG.ENABLE_TEMPERATURE_CORRECTION,
-            capacity_factor=vessel.capacity_factor if hasattr(vessel, 'capacity_factor') else 1.0,
-            use_multistage=True  # Re-enable multistage for proper H-form initialization
+            database_path=phreeqc_db_path,
+            resin_form="H",
+            initialization_mode=init_mode
         )
         
         # Run PHREEQC
@@ -1515,9 +1548,13 @@ class WacHSimulation(BaseWACSimulation):
                 "warning": str(e)
             }
 
-        # Calculate capacity utilization
+        # Calculate capacity utilization with correct unit conversions
+        # theoretical_capacity: eq/L × L = eq
         theoretical_capacity = CONFIG.WAC_H_TOTAL_CAPACITY * vessel.bed_volume_L
-        feed_alkalinity_eq = (water.hco3_mg_l / CONFIG.HCO3_EQUIV_WEIGHT) * flow_rate_m3_hr * service_time_hours
+        # feed_alkalinity: (mg/L ÷ mg/meq) = meq/L, × (m³/hr × hr × 1000 L/m³) = meq, ÷ 1000 = eq
+        feed_alkalinity_meq_L = water.hco3_mg_l / CONFIG.HCO3_EQUIV_WEIGHT  # meq/L
+        volume_treated_L = flow_rate_m3_hr * 1000 * service_time_hours  # L
+        feed_alkalinity_eq = (feed_alkalinity_meq_L / 1000) * volume_treated_L  # eq
         capacity_utilization = (feed_alkalinity_eq / theoretical_capacity * 100) if theoretical_capacity > 0 else 0
         
         # Prepare warnings

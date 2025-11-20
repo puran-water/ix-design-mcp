@@ -142,22 +142,17 @@ def create_wac_h_phreeqc_input(
     Returns:
         PHREEQC input string
     """
-    # Import the simple SURFACE model
-    try:
-        from tools.wac_h_surface_simple import create_wac_h_simple_surface_input
-        logger.info("Using simple SURFACE model for WAC_H (prevents acid bomb)")
-
-        # Call the simple SURFACE model
-        return create_wac_h_simple_surface_input(
-            water_composition=water_composition,
-            vessel_config=vessel_config,
-            cells=cells,
-            max_bv=max_bv,
-            database_path=database_path
-        )
-    except ImportError as e:
-        logger.error(f"Failed to import SURFACE dual-domain model: {e}")
-        raise ImportError("WAC H-form SURFACE model required but not available")
+    # Use dual-domain EXCHANGE model (same proven approach as WAC_Na)
+    logger.info("Using dual-domain EXCHANGE model for WAC_H (prevents pH crash)")
+    return _create_wac_dual_domain_input(
+        water_composition=water_composition,
+        vessel_config=vessel_config,
+        cells=cells,
+        max_bv=max_bv,
+        database_path=database_path,
+        capacity_factor=capacity_factor,
+        resin_form='H'
+    )
 
 
 def _create_wac_dual_domain_input(
@@ -272,15 +267,15 @@ def _create_wac_dual_domain_input(
     lines.append("")
     lines.append("    # Protonation (H-form)")
     lines.append("    X- + H+ = XH")
-    lines.append("        log_k  -4.5  # Association reaction, matches pKa")
+    lines.append("        log_k  4.8  # pKa for acrylic WAC resin (literature: 4.8 +/- 0.1)")
     lines.append("")
     lines.append("    # Calcium exchange")
     lines.append("    2X- + Ca+2 = CaX2")
-    lines.append("        log_k  0.8  # Moderate selectivity from wac_exchange_dual_domain.py")
+    lines.append("        log_k  2.0  # From resin_selectivity.json; net Ca/H = 2.0 - 9.6 = -7.6")
     lines.append("")
     lines.append("    # Magnesium exchange")
     lines.append("    2X- + Mg+2 = MgX2")
-    lines.append("        log_k  0.3  # Lower than Ca from wac_exchange_dual_domain.py")
+    lines.append("        log_k  1.8  # From resin_selectivity.json; slightly lower than Ca")
     lines.append("")
     lines.append("    # Sodium exchange")
     lines.append("    X- + Na+ = NaX")

@@ -380,20 +380,31 @@ class BaseIXSimulation(ABC):
         valid_concentrations = numeric_array[valid_mask]
         valid_bv = bv_array[valid_mask]
 
-        idx = np.where(valid_concentrations > target)[0]
+        # Filter out equilibration step (BV < 0.1) to avoid false breakthrough detection
+        # The equilibration step (BV=0) often has high concentration before exchange equilibrium
+        min_bv_threshold = 0.1
+        transport_mask = valid_bv >= min_bv_threshold
+        if not np.any(transport_mask):
+            # No transport steps available
+            return None
+
+        transport_bv = valid_bv[transport_mask]
+        transport_conc = valid_concentrations[transport_mask]
+
+        idx = np.where(transport_conc > target)[0]
         if len(idx) > 0:
             i = idx[0]
             if i > 0:
                 # Linear interpolation for exact breakthrough point
                 bv_breakthrough = np.interp(
                     target,
-                    [valid_concentrations[i-1], valid_concentrations[i]],
-                    [valid_bv[i-1], valid_bv[i]]
+                    [transport_conc[i-1], transport_conc[i]],
+                    [transport_bv[i-1], transport_bv[i]]
                 )
                 return float(bv_breakthrough)
             else:
-                # Target exceeded from start
-                return float(valid_bv[0])
+                # Target exceeded from start of transport
+                return float(transport_bv[0])
         return None
     
     def _detect_breakthrough(
@@ -460,24 +471,45 @@ class BaseIXSimulation(ABC):
         loading_meq_L: float,
         capacity_eq_L: float,
         buffer_factor: float = 3.0,  # Increased from 1.2 to ensure we see breakthrough
-        min_bv: int = 200
+        min_bv: int = 200,
+        max_bv: int = None  # Safety cap to prevent runaway simulations
     ) -> int:
         """
         Calculate dynamic max BV based on theoretical capacity.
-        
+
         Args:
             loading_meq_L: Feed water loading (hardness, alkalinity, etc.) in meq/L
             capacity_eq_L: Resin working capacity in eq/L
-            buffer_factor: Safety factor (default 1.2 = 20% buffer)
+            buffer_factor: Safety factor (default 3.0 = ensure breakthrough)
             min_bv: Minimum BV to simulate
-            
+            max_bv: Maximum BV cap (default from CONFIG.MAX_SIMULATION_BV)
+
         Returns:
-            Calculated max BV for simulation
+            Calculated max BV for simulation, capped to prevent timeout
         """
+        from tools.core_config import CONFIG
+
+        # Use config default if not specified
+        if max_bv is None:
+            max_bv = CONFIG.MAX_SIMULATION_BV
+
         if loading_meq_L > 0:
             theoretical_bv = (capacity_eq_L * 1000) / loading_meq_L
             calculated_bv = int(theoretical_bv * buffer_factor)
-            return max(calculated_bv, min_bv)
+
+            # Apply min/max bounds
+            result = max(calculated_bv, min_bv)
+            result = min(result, max_bv)
+
+            # Log warning if capped (but don't return incomplete results)
+            if calculated_bv > max_bv:
+                logger.warning(
+                    f"Dynamic max_bv capped: {calculated_bv} -> {max_bv} "
+                    f"(theoretical={theoretical_bv:.0f}, loading={loading_meq_L:.2f} meq/L). "
+                    f"Breakthrough may not be reached if cap is too low."
+                )
+
+            return result
         else:
             return min_bv
     
