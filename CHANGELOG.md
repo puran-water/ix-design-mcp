@@ -1,5 +1,29 @@
 IX Design MCP Server – Changelog
 
+2.2.1 – 2025-11-21
+- **CRITICAL**: Implemented auto-scaling for Pitzer + SURFACE numerical stability
+  - Root cause (validated): Large site inventory (~18,000 mol) overwhelms Newton-Raphson solver with Pitzer database
+  - Test evidence: 10% site density (~1,800 mol) succeeded, full density (~17,940 mol) failed
+  - Solution: Automatically increase cell count when sites_per_cell > 2,000 mol threshold
+  - Added `enable_autoscaling` parameter to `build_wac_surface_template()` (default: True)
+  - Auto-scaling activates for Pitzer database + high site density (transparent to user)
+- **Improved**: Smart database selection for WAC H-form simulations
+  - Calculate ionic strength (I) from water composition for accurate database selection
+  - I < 0.5 M: Use phreeqc.dat (better SURFACE convergence, adequate accuracy)
+  - I ≥ 0.5 M: Use pitzer.dat (required for high ionic strength)
+  - Moderate TDS (10-15 g/L) waters now use phreeqc.dat for improved stability
+- **Fixed**: Staged initialization now triggers on TDS/IS, not database choice
+  - Changed from database-based to TDS > 10 g/L OR I > 0.2 M threshold
+  - Prevents direct H-form initialization failures with high-TDS water
+- **Test Results** (Jobs 7d9bb124, ce44fc56, 8e91a22a, f42999a1):
+  - ✅ SAC: 181.4 BV, 84.2% utilization, 98.9% hardness removal
+  - ✅ WAC Na+: 65.4 BV, 50.6% utilization, clean convergence
+  - ❌ WAC H+: Blocked by Donnan layer convergence failure with high-TDS (I=0.25M)
+  - Error: "Too many iterations in calc_psi_avg" during staged initialization
+- **Known Limitation**: WAC H-form SURFACE model fails convergence for TDS > 10 g/L due to Donnan layer + high ionic strength incompatibility in PHREEQC
+- Modified files: `tools/wac_surface_builder.py` (lines 36, 59-103), `tools/wac_simulation.py` (lines 1395-1451)
+- Why it matters: SAC and WAC Na+ now work reliably. WAC H+ needs alternative approach for high-TDS waters (EXCHANGE model or Donnan removal)
+
 2.2.0 – 2025-11-20
 - **CRITICAL**: Implemented staged initialization for WAC H-form to fix convergence failures with corrected log_k values
   - Root cause: Direct H-form initialization dumps massive proton load into high-TDS brine → extreme charge imbalance

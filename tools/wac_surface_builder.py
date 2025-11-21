@@ -32,7 +32,8 @@ def build_wac_surface_template(
     max_bv: int = 300,
     database_path: str = None,
     resin_form: str = "Na",  # "Na" for sodium form, "H" for hydrogen form
-    initialization_mode: str = "direct"  # "direct" or "staged" (staged recommended for high TDS + H-form)
+    initialization_mode: str = "direct",  # "direct" or "staged" (staged recommended for high TDS + H-form)
+    enable_autoscaling: bool = True  # Auto-scale cells for Pitzer + SURFACE numerical stability
 ) -> str:
     """
     Build SURFACE-based WAC template with correct acid-base chemistry.
@@ -55,6 +56,8 @@ def build_wac_surface_template(
         resin_form: Initial resin form - "Na" or "H"
         initialization_mode: "direct" (immediate H-form) or "staged" (gradual Na→H conversion)
                              Staged mode recommended for high-TDS water + H-form to avoid convergence failure
+        enable_autoscaling: If True, automatically scale cell count for Pitzer + SURFACE numerical stability
+                           Target: <2,000 mol sites per cell when using Pitzer database
 
     Returns:
         Complete PHREEQC input string with SURFACE complexation model
@@ -62,6 +65,42 @@ def build_wac_surface_template(
 
     if water_composition is None:
         water_composition = {}
+
+    # Auto-scale cells for Pitzer + SURFACE numerical stability
+    # Root cause (validated): Large site inventory overwhelms Newton-Raphson solver
+    # Solution: Keep sites_per_cell < 2,000 mol when using Pitzer database
+    if enable_autoscaling and database_path and 'pitzer' in database_path.lower():
+        # Calculate TDS to confirm we're in high-TDS regime
+        tds_g_l = (
+            water_composition.get('ca_mg_l', 0) +
+            water_composition.get('mg_mg_l', 0) +
+            water_composition.get('na_mg_l', 0) +
+            water_composition.get('k_mg_l', 0) +
+            water_composition.get('cl_mg_l', 0) +
+            water_composition.get('so4_mg_l', 0) +
+            water_composition.get('hco3_mg_l', 0)
+        ) / 1000.0
+
+        # Calculate sites per cell with current configuration
+        total_sites_mol = capacity_eq_l * bed_volume_L
+        sites_per_cell = total_sites_mol / cells
+
+        # Threshold from validated testing: Job c7175054 (10% density = ~1,800 mol) succeeded
+        # Using 2,000 mol as conservative threshold with safety margin
+        target_sites_per_cell = 2000  # mol
+
+        if sites_per_cell > target_sites_per_cell:
+            # Calculate required cell count
+            import math
+            cells_needed = int(math.ceil(total_sites_mol / target_sites_per_cell))
+
+            logger.warning(
+                f"Auto-scaling cells for Pitzer + SURFACE numerical stability: "
+                f"{cells} → {cells_needed} cells "
+                f"(TDS: {tds_g_l:.1f} g/L, sites_per_cell: {sites_per_cell:.0f} → {total_sites_mol/cells_needed:.0f} mol)"
+            )
+
+            cells = cells_needed
 
     # PHASE 2 DEBUG: Log input water composition
     logger.info(f"[PHASE2-DEBUG] build_wac_surface_template called with:")
@@ -198,9 +237,10 @@ SOLUTION 1-{cells} Initial column water
         phreeqc_input += f"""
 SURFACE {i}
     -sites_units absolute
-    -donnan  # Use Donnan model for proper charge balance (per PHREEQC docs)
-             # Counter-charge resides in diffuse layer, not bulk solution
-             # Improves convergence with high surface charge (Codex session 019aa2b9-d23b)
+    -no_edl  # Disable electrical double layer (Donnan) to prevent calc_psi_avg convergence failure
+             # Preserves pH-dependent protonation/deprotonation chemistry (SURFACE mass-action)
+             # Eliminates "Too many iterations in calc_psi_avg" error at high ionic strength
+             # Validated: PHREEQC docs HTMLversion/HTML/phreeqc3-52.htm:535-544 (Codex session 019aa7b7-e9ec)
     Wac_s {sites_per_cell} 1 1
 """
 

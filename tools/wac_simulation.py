@@ -1392,9 +1392,38 @@ class WacHSimulation(BaseWACSimulation):
 
         logger.info(f"Dynamic max_bv calculated: {max_bv} (alkalinity loading: {alkalinity_meq_L:.2f} meq/L)")
 
-        # Automatically use Pitzer database for high-TDS water to ensure PHREEQC convergence
-        if requires_pitzer:
+        # Smart database selection for WAC H-form SURFACE model
+        # phreeqc.dat: Better convergence with SURFACE, valid to I ≈ 0.7 M
+        # pitzer.dat: Required for very high TDS (I > 0.5 M), but numerical challenges with SURFACE
+
+        # Calculate ionic strength for database selection
+        # I ≈ 0.5 × Σ(c_i × z_i²) where c_i is concentration (mol/L), z_i is charge
+        ca_mol_l = water.ca_mg_l / 40.078 / 1000
+        mg_mol_l = water.mg_mg_l / 24.305 / 1000
+        na_mol_l = water.na_mg_l / 22.990 / 1000
+        k_mol_l = water.k_mg_l / 39.098 / 1000
+        cl_mol_l = getattr(water, 'cl_mg_l', 0) / 35.453 / 1000
+        so4_mol_l = water.so4_mg_l / 96.06 / 1000
+        hco3_mol_l = water.hco3_mg_l / 61.017 / 1000
+
+        ionic_strength = 0.5 * (
+            ca_mol_l * 4 + mg_mol_l * 4 +  # z² = 4 for divalent
+            na_mol_l * 1 + k_mol_l * 1 +     # z² = 1 for monovalent
+            cl_mol_l * 1 + hco3_mol_l * 1 +  # z² = 1 for monovalent anions
+            so4_mol_l * 4                     # z² = 4 for divalent anion
+        )
+
+        # Database selection logic:
+        # - I < 0.5 M: Use phreeqc.dat (better with SURFACE, adequate accuracy)
+        # - I ≥ 0.5 M: Use pitzer.dat (required for high ionic strength)
+        if ionic_strength >= 0.5:
             phreeqc_db_path = str(CONFIG.get_phreeqc_database('pitzer.dat'))
+            logger.info(f"Using pitzer.dat for high ionic strength (I = {ionic_strength:.3f} M, TDS = {tds_g_l:.1f} g/L)")
+        elif requires_pitzer:
+            # Moderate TDS (10-15 g/L) but I < 0.5 M: Use phreeqc.dat for better SURFACE convergence
+            phreeqc_db_path = str(CONFIG.get_phreeqc_database())
+            logger.info(f"Using phreeqc.dat for moderate TDS/IS (I = {ionic_strength:.3f} M, TDS = {tds_g_l:.1f} g/L)")
+            logger.info("phreeqc.dat provides better SURFACE convergence at moderate ionic strength")
         else:
             phreeqc_db_path = str(CONFIG.get_phreeqc_database())
 
@@ -1410,10 +1439,13 @@ class WacHSimulation(BaseWACSimulation):
             default_ph = getattr(water, 'ph', 7.5)
             water_dict['pH'] = water_dict.get('ph', default_ph)
 
-        # Use staged initialization for high-TDS water to avoid convergence failures
-        init_mode = 'staged' if requires_pitzer else 'direct'
-        if requires_pitzer:
-            logger.info(f"Using staged initialization mode for high-TDS water (TDS: {tds_g_l:.1f} g/L)")
+        # ALWAYS use staged initialization for WAC H-form SURFACE model
+        # Rationale: Even with -no_edl, direct initialization dumps massive H+ into dilute solution
+        # causing catastrophic charge imbalance and convergence failure
+        # Codex analysis (019aa7b7): "Direct mode is essentially unsalvageable at these site loads"
+        # Staged mode: Pre-equilibrate in Na-form, then gradually convert to H-form via HCl additions
+        init_mode = 'staged'
+        logger.info(f"Using staged initialization mode (ALWAYS for WAC H+ SURFACE - I = {ionic_strength:.3f} M, TDS = {tds_g_l:.1f} g/L)")
 
         phreeqc_input = build_wac_surface_template(
             pka=CONFIG.WAC_PKA,
@@ -1431,7 +1463,8 @@ class WacHSimulation(BaseWACSimulation):
             max_bv=max_bv,
             database_path=phreeqc_db_path,
             resin_form="H",
-            initialization_mode=init_mode
+            initialization_mode=init_mode,
+            enable_autoscaling=True  # Auto-scale cells for Pitzer + SURFACE numerical stability
         )
         
         # Run PHREEQC
