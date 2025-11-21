@@ -34,7 +34,7 @@ except ImportError:
 def create_wac_na_phreeqc_input(
     water_composition: Dict[str, float],
     vessel_config: Dict[str, float],
-    cells: int = 10,
+    cells: int = 16,  # Increased from 10 to improve TRANSPORT stability (Codex 019aa7b7)
     max_bv: int = 300,
     database_path: Optional[str] = None,
     enable_enhancements: bool = True,
@@ -199,7 +199,9 @@ def _create_wac_dual_domain_input(
     capacity_eq_L = base_capacity * capacity_factor
 
     # Dual-domain parameters
-    mobile_fraction = 0.1  # 10% mobile fraction matching working model
+    # Reduced from 0.1 to 0.05 for TRANSPORT stability (Codex 019aa7b7)
+    # Lower mobile fraction reduces instantaneous charge change in mobile zone
+    mobile_fraction = 0.05
     porosity = 0.4
 
     # Calculate exchange capacity distribution
@@ -218,8 +220,9 @@ def _create_wac_dual_domain_input(
     water_volume_L = bed_volume_L * porosity
     water_per_cell_kg = water_volume_L / cells
 
-    # Mass transfer coefficient (calibrated for typical resin beads)
-    alpha = 1.7e-5  # 1/s
+    # Mass transfer coefficient (reduced from 1.7e-5 for TRANSPORT stability - Codex 019aa7b7)
+    # Lower alpha reduces mass transfer rate between mobile/immobile zones
+    alpha = 5e-6  # 1/s
 
     # Calculate shifts for max_bv
     shifts = int(max_bv * bed_volume_L / water_per_cell_kg)
@@ -265,10 +268,15 @@ def _create_wac_dual_domain_input(
     lines.append("    X- = X-")
     lines.append("        log_k  0.0")
     lines.append("")
-    lines.append("    # Protonation (H-form)")
-    lines.append("    X- + H+ = XH")
-    lines.append("        log_k  4.8  # pKa for acrylic WAC resin (literature: 4.8 +/- 0.1)")
-    lines.append("")
+
+    # Only include protonation reaction for H-form
+    # For Na-form, this causes pH spike to 10-11 and stiffens TRANSPORT solver (Codex 019aa7b7)
+    if resin_form == 'H':
+        lines.append("    # Protonation (H-form)")
+        lines.append("    X- + H+ = XH")
+        lines.append("        log_k  4.8  # pKa for acrylic WAC resin (literature: 4.8 +/- 0.1)")
+        lines.append("")
+
     lines.append("    # Calcium exchange")
     lines.append("    2X- + Ca+2 = CaX2")
     lines.append("        log_k  2.0  # From resin_selectivity.json; net Ca/H = 2.0 - 9.6 = -7.6")
@@ -316,13 +324,19 @@ def _create_wac_dual_domain_input(
         lines.append("    Cl        1e-6 charge  # Trace for equilibration")
         lines.append(f"    water     {immobile_water_kg} kg")
     else:
-        # Na-form: Neutral pH with Na
+        # Na-form: Initialize at feed pH with background matching feed ionic strength
+        # Prevents pH shock and improves TRANSPORT stability (Codex 019aa7b7)
+        feed_ph = water_composition.get('pH', 7.8)
+        feed_na = water_composition.get('na_mg_l', 200)  # Use feed Na as background
+        feed_hco3 = water_composition.get('hco3_mg_l', 0)  # Match feed alkalinity (Codex 019aa7b7)
         lines.append(f"SOLUTION 1-{cells}  # Initial column - Na form")
         lines.append("    units     mg/L")
         lines.append(f"    temp      {water_composition.get('temperature_celsius', 25)}")
-        lines.append("    pH        7.0")
-        lines.append("    Na        100")
-        lines.append("    Cl        100 charge")
+        lines.append(f"    pH        {feed_ph}  # Match feed pH")
+        lines.append(f"    Na        {feed_na}  # Background Na from feed")
+        if feed_hco3 > 0:
+            lines.append(f"    C(4)      {feed_hco3} as HCO3  # Match feed alkalinity")
+        lines.append("    Cl        charge  # Auto-balance")
         lines.append(f"    water     {water_per_cell_kg} kg")
     lines.append("")
 
@@ -340,10 +354,10 @@ def _create_wac_dual_domain_input(
     else:
         # Na-form: All sites start as NaX
         lines.append(f"EXCHANGE 1-{cells}  # Mobile sites")
-        lines.append(f"    NaX       {mobile_eq_per_cell / water_per_cell_kg}")
+        lines.append(f"    NaX       {mobile_eq_per_cell}")
         lines.append("")
         lines.append(f"EXCHANGE 1-{cells}i  # Immobile sites")
-        lines.append(f"    NaX       {immobile_eq_per_cell / water_per_cell_kg}")
+        lines.append(f"    NaX       {immobile_eq_per_cell}")
         lines.append("")
 
     # CO2 equilibrium for pH buffering (small finite amount)
@@ -368,6 +382,9 @@ def _create_wac_dual_domain_input(
     lines.append("    -flow_direction forward")
     lines.append("    -boundary_conditions flux flux")
     lines.append(f"    -stagnant 1 {alpha} {porosity * mobile_fraction} {porosity * (1 - mobile_fraction)}")  # Key: mass transfer
+    # Add stability controls to prevent "Maximum iterations exceeded" cascade (Codex 019aa7b7)
+    lines.append("    -tolerance     1e-10  # Tighter tolerance for stiff problems")
+    lines.append("    -gamma         0.35   # Advection damping coefficient")
     lines.append(f"    -print_frequency {cells}")
     lines.append(f"    -punch_frequency {cells}")
     lines.append(f"    -punch_cells {cells}")
