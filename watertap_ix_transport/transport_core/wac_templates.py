@@ -247,7 +247,8 @@ def _create_wac_dual_domain_input(
     alpha = 5e-6  # 1/s
 
     # Calculate shifts for max_bv
-    shifts = int(max_bv * bed_volume_L / water_per_cell_kg)
+    # Interpret max_bv as number of pore volumes to simulate (independent of cells)
+    shifts = int(np.ceil(max_bv))
 
     # Cell length
     cell_length_m = bed_depth_m / cells
@@ -546,7 +547,7 @@ def _create_wac_dual_domain_input(
     lines.append("    -headings BV pH Ca_mg/L Mg_mg/L Hardness_mg/L Alk_mg/L CO2_mol/L Ca_Removal_%")
     lines.append("    -start")
     lines.append("    10 REM Calculate bed volumes")
-    lines.append(f"    20 BV = STEP_NO * {water_per_cell_kg} / {bed_volume_L}")
+    lines.append("    20 BV = STEP_NO  # Each shift represents one pore volume at the inlet")
     lines.append("    30 IF (STEP_NO < 0) THEN GOTO 500  # Skip initial equilibration")
     lines.append("    40 PUNCH BV")
     lines.append("    50 PUNCH -LA(\"H+\")")
