@@ -31,6 +31,15 @@ except ImportError:
     logger.error("WAC SURFACE builder not available - WAC simulations will fail")
 
 
+# Small helper to tolerate legacy and new field names (pH vs ph, Cl_- vs cl_mg_l, etc.)
+def _get(dct: Dict[str, Any], *keys, default: Any = 0.0):
+    """Extract value from dict using multiple possible keys (tries in order)."""
+    for k in keys:
+        if k in dct and dct[k] is not None:
+            return dct[k]
+    return default
+
+
 def create_wac_na_phreeqc_input(
     water_composition: Dict[str, float],
     vessel_config: Dict[str, float],
@@ -212,6 +221,19 @@ def _create_wac_dual_domain_input(
     mobile_capacity_eq = total_capacity_eq * mobile_fraction
     immobile_capacity_eq = total_capacity_eq * (1 - mobile_fraction)
 
+    # Auto-refine cells for Na-form to limit per-cell capacity and stiffness
+    if resin_form == 'Na':
+        target_mobile_eq = 1.0   # eq per cell (mobile)
+        target_immobile_eq = 10.0  # eq per cell (immobile)
+        cells_needed = max(
+            cells,
+            int(np.ceil(mobile_capacity_eq / target_mobile_eq)) if mobile_capacity_eq > 0 else cells,
+            int(np.ceil(immobile_capacity_eq / target_immobile_eq)) if immobile_capacity_eq > 0 else cells,
+        )
+        if cells_needed != cells:
+            logger.info(f"Auto-adjusting cells for Na-form: {cells} -> {cells_needed} to limit per-cell capacity")
+            cells = cells_needed
+
     # Per cell calculations
     mobile_eq_per_cell = mobile_capacity_eq / cells
     immobile_eq_per_cell = immobile_capacity_eq / cells
@@ -250,12 +272,14 @@ def _create_wac_dual_domain_input(
     lines.append(f"# Mobile fraction: {mobile_fraction*100}%")
     lines.append("")
 
-    # Convergence parameters
+    # Convergence parameters (validated against usgs-coupled/phreeqc3 via Codex 019aa7b7)
+    # These KNOBS controls improve stability for stiff dual-domain chemistry
     lines.append("KNOBS")
-    lines.append("    -iterations 200")  # Reduced for faster convergence
-    lines.append("    -convergence_tolerance 1e-8")  # Relaxed for faster convergence
-    lines.append("    -step_size 10")
-    lines.append("    -pe_step_size 2")
+    lines.append("    -iterations 400")  # Increased for difficult convergence
+    lines.append("    -convergence_tolerance 1e-8")  # Relaxed for stiff ion-exchange gradients
+    lines.append("    -step_size 5")  # Smaller steps for stability
+    lines.append("    -pe_step_size 1")  # Conservative redox steps
+    lines.append("    -diagonal_scale true")  # Improves conditioning for stiff problems
     lines.append("")
 
     # Define exchange master species and reactions
@@ -290,23 +314,29 @@ def _create_wac_dual_domain_input(
     lines.append("        log_k  0.0  # Reference")
     lines.append("")
 
-    # Feed solution
-    lines.append("SOLUTION 0  # Feed water")
-    lines.append("    units     mg/L")
-    lines.append(f"    temp      {water_composition.get('temperature_celsius', 25)}")
-    lines.append(f"    pH        {water_composition.get('ph', 7.8)}")
-    lines.append(f"    Ca        {water_composition.get('ca_mg_l', 0)}")
-    lines.append(f"    Mg        {water_composition.get('mg_mg_l', 0)}")
-    lines.append(f"    Na        {water_composition.get('na_mg_l', 0)}")
-    lines.append(f"    K         {water_composition.get('k_mg_l', 0)}")
-    lines.append(f"    Cl        {water_composition.get('cl_mg_l', 0)}")
-    lines.append(f"    C(4)      {water_composition.get('hco3_mg_l', 0)} as HCO3")
-    lines.append(f"    S(6)      {water_composition.get('so4_mg_l', 0)} as SO4")
-    lines.append("")
+    # Calculate immobile water mass (used by both H-form and Na-form)
+    immobile_water_kg = water_per_cell_kg * (1 - porosity) / porosity
 
-    # Initial solutions in column (equilibrated with resin)
     if resin_form == 'H':
-        # H-form: Initial solution near pKa to avoid harsh pH
+        # ------------------------------------------------------------------
+        # H-form: single-run initialization (unchanged logic)
+        # ------------------------------------------------------------------
+
+        # Feed solution
+        lines.append("SOLUTION 0  # Feed water")
+        lines.append("    units     mg/L")
+        lines.append(f"    temp      {_get(water_composition, 'temperature_celsius', default=25)}")
+        lines.append(f"    pH        {_get(water_composition, 'pH', 'ph', default=7.8)}")
+        lines.append(f"    Ca        {_get(water_composition, 'ca_mg_l', default=0)}")
+        lines.append(f"    Mg        {_get(water_composition, 'mg_mg_l', default=0)}")
+        lines.append(f"    Na        {_get(water_composition, 'na_mg_l', 'Na_1+', 'Na_+', default=0)}")
+        lines.append(f"    K         {_get(water_composition, 'k_mg_l', default=0)}")
+        lines.append(f"    Cl        {_get(water_composition, 'cl_mg_l', 'Cl_1-', 'Cl_-', default=0)}")
+        lines.append(f"    C(4)      {_get(water_composition, 'hco3_mg_l', 'HCO3_1-', 'HCO3_-', default=0)} as HCO3")
+        lines.append(f"    S(6)      {_get(water_composition, 'so4_mg_l', 'SO4_2-', default=0)} as SO4")
+        lines.append("")
+
+        # Initial solutions in column (equilibrated with resin)
         lines.append(f"SOLUTION 1-{cells}  # Initial column - H form")
         lines.append("    units     mg/L")
         lines.append(f"    temp      {water_composition.get('temperature_celsius', 25)}")
@@ -315,80 +345,187 @@ def _create_wac_dual_domain_input(
         lines.append(f"    water     {water_per_cell_kg} kg")
         lines.append("")
 
-        # Add immobile pore solution for H-form
-        immobile_water_kg = water_per_cell_kg * (1 - porosity) / porosity
-        lines.append(f"SOLUTION 1-{cells}i  # Immobile pore water")
+        # Immobile cells: contiguous numbering (Codex 019aab6b)
+        lines.append(f"SOLUTION {cells+1}-{2*cells}  # Immobile - H form")
         lines.append("    units     mg/L")
         lines.append(f"    temp      {water_composition.get('temperature_celsius', 25)}")
         lines.append("    pH        3.5")
         lines.append("    Cl        1e-6 charge  # Trace for equilibration")
         lines.append(f"    water     {immobile_water_kg} kg")
-    else:
-        # Na-form: Initialize at feed pH with background matching feed ionic strength
-        # Prevents pH shock and improves TRANSPORT stability (Codex 019aa7b7)
-        feed_ph = water_composition.get('pH', 7.8)
-        feed_na = water_composition.get('na_mg_l', 200)  # Use feed Na as background
-        feed_hco3 = water_composition.get('hco3_mg_l', 0)  # Match feed alkalinity (Codex 019aa7b7)
-        lines.append(f"SOLUTION 1-{cells}  # Initial column - Na form")
-        lines.append("    units     mg/L")
-        lines.append(f"    temp      {water_composition.get('temperature_celsius', 25)}")
-        lines.append(f"    pH        {feed_ph}  # Match feed pH")
-        lines.append(f"    Na        {feed_na}  # Background Na from feed")
-        if feed_hco3 > 0:
-            lines.append(f"    C(4)      {feed_hco3} as HCO3  # Match feed alkalinity")
-        lines.append("    Cl        charge  # Auto-balance")
-        lines.append(f"    water     {water_per_cell_kg} kg")
-    lines.append("")
+        lines.append("")
 
-    # Exchange sites - split between mobile and immobile
-    if resin_form == 'H':
-        # H-form: Direct initialization as XH (pre-protonated)
+        # Exchange sites - split between mobile and immobile
         lines.append(f"EXCHANGE 1-{cells}  # Mobile sites")
         lines.append(f"    XH        {mobile_eq_per_cell}")
         lines.append(f"    -equilibrate with solution 1-{cells}")
         lines.append("")
-        lines.append(f"EXCHANGE 1-{cells}i  # Immobile sites")
+        lines.append(f"EXCHANGE {cells+1}-{2*cells}  # Immobile sites")
         lines.append(f"    XH        {immobile_eq_per_cell}")
-        lines.append(f"    -equilibrate with solution 1-{cells}i")
-        lines.append("")
-    else:
-        # Na-form: All sites start as NaX
-        lines.append(f"EXCHANGE 1-{cells}  # Mobile sites")
-        lines.append(f"    NaX       {mobile_eq_per_cell}")
-        lines.append("")
-        lines.append(f"EXCHANGE 1-{cells}i  # Immobile sites")
-        lines.append(f"    NaX       {immobile_eq_per_cell}")
+        lines.append(f"    -equilibrate with solution {cells+1}-{2*cells}")
         lines.append("")
 
-    # CO2 equilibrium for pH buffering (small finite amount)
-    if resin_form == 'H':
+        # CO2 equilibrium for pH buffering (small finite amount)
         lines.append(f"EQUILIBRIUM_PHASES 1-{cells}")
         lines.append("    CO2(g)    -3.5  0.01  # Small CO2 reservoir for pH buffering")
         lines.append("")
 
-    # DUMP for debugging initial state
-    lines.append("DUMP")
-    lines.append(f"    -solution 1-{cells} 1-{cells}i")
-    lines.append(f"    -exchange 1-{cells} 1-{cells}i")
-    lines.append("")
+        # DUMP for debugging initial state (contiguous numbering)
+        lines.append("DUMP")
+        lines.append(f"    -solution 1-{2*cells}")
+        lines.append(f"    -exchange 1-{2*cells}")
+        lines.append("")
 
-    # Transport with stagnant zones
-    lines.append("TRANSPORT")
-    lines.append(f"    -cells    {cells}")
-    lines.append(f"    -shifts   {shifts}")
-    lines.append(f"    -lengths  {cell_length_m}")
-    lines.append(f"    -dispersivities {cells}*0.002")
-    lines.append(f"    -porosities {porosity}")
-    lines.append("    -flow_direction forward")
-    lines.append("    -boundary_conditions flux flux")
-    lines.append(f"    -stagnant 1 {alpha} {porosity * mobile_fraction} {porosity * (1 - mobile_fraction)}")  # Key: mass transfer
-    # Add stability controls to prevent "Maximum iterations exceeded" cascade (Codex 019aa7b7)
-    lines.append("    -tolerance     1e-10  # Tighter tolerance for stiff problems")
-    lines.append("    -gamma         0.35   # Advection damping coefficient")
-    lines.append(f"    -print_frequency {cells}")
-    lines.append(f"    -punch_frequency {cells}")
-    lines.append(f"    -punch_cells {cells}")
-    lines.append("")
+        # Transport with stagnant zones
+        lines.append("TRANSPORT")
+        lines.append(f"    -cells    {cells}")
+        lines.append(f"    -shifts   {shifts}")
+        lines.append(f"    -lengths  {cell_length_m}")
+        lines.append(f"    -dispersivities {cells}*0.002")
+        lines.append(f"    -porosities {porosity}")
+        lines.append("    -flow_direction forward")
+        lines.append("    -boundary_conditions flux flux")
+        lines.append(f"    -stagnant 1 {alpha} {porosity * mobile_fraction} {porosity * (1 - mobile_fraction)}")  # Key: mass transfer
+        lines.append(f"    -print_frequency {cells}")
+        lines.append(f"    -punch_frequency {cells}")
+        lines.append(f"    -punch_cells {cells}")
+        lines.append("")
+
+    else:
+        # ------------------------------------------------------------------
+        # Na-form: two-stage approach to allow Na-saturated resin with
+        # realistic low-Na pore water.
+        # Stage 1: Pre-saturate exchanger with a brine, SAVE exchange.
+        # Stage 2: USE saved exchange with low-Na porewater and run TRANSPORT.
+        # ------------------------------------------------------------------
+
+        # Stage 1: Brine preload to fully occupy exchanger (SAVE solution+exchange)
+        feed_ph = _get(water_composition, 'pH', 'ph', default=7.8)
+        max_eq_per_water = max(
+            mobile_eq_per_cell / water_per_cell_kg,
+            immobile_eq_per_cell / immobile_water_kg
+        )
+        preload_na_mg_l = max_eq_per_water * 23000 * 1.2  # 20% safety factor
+
+        lines.append("# Stage 1: Pre-saturate exchanger with high-Na solution")
+        lines.append(f"SOLUTION 1-{cells}  # Mobile brine preload")
+        lines.append("    units     mg/L")
+        lines.append(f"    temp      {_get(water_composition, 'temperature_celsius', default=25)}")
+        lines.append(f"    pH        {feed_ph}")
+        lines.append(f"    Na        {preload_na_mg_l:.1f}")
+        lines.append(f"    Cl        {preload_na_mg_l:.1f} charge")
+        lines.append(f"    water     {water_per_cell_kg} kg")
+        lines.append("")
+
+        lines.append(f"SOLUTION {cells+1}-{2*cells}  # Immobile brine preload")
+        lines.append("    units     mg/L")
+        lines.append(f"    temp      {_get(water_composition, 'temperature_celsius', default=25)}")
+        lines.append(f"    pH        {feed_ph}")
+        lines.append(f"    Na        {preload_na_mg_l:.1f}")
+        lines.append(f"    Cl        {preload_na_mg_l:.1f} charge")
+        lines.append(f"    water     {immobile_water_kg} kg")
+        lines.append("")
+
+        lines.append(f"EXCHANGE 1-{cells}  # Mobile capacity preset")
+        lines.append(f"    NaX       {mobile_eq_per_cell}")
+        lines.append(f"    -equilibrate 1-{cells}")
+        lines.append("")
+        lines.append(f"EXCHANGE {cells+1}-{2*cells}  # Immobile capacity preset")
+        lines.append(f"    NaX       {immobile_eq_per_cell}")
+        lines.append(f"    -equilibrate {cells+1}-{2*cells}")
+        lines.append("")
+        lines.append(f"SAVE solution 1-{2*cells}")
+        lines.append(f"SAVE exchange 1-{2*cells}")
+        lines.append("")
+        lines.append("END")
+        lines.append("")
+
+        # Stage 2: Actual transport run with realistic porewater (loaded from SAVE)
+        lines.append("# Stage 2: Conditioning transport with brine feed (smooths gradient)")
+
+        # Use the same high-Na brine as feed for conditioning
+        lines.append("SOLUTION 0  # Conditioning feed (brine)")
+        lines.append("    units     mg/L")
+        lines.append(f"    temp      {_get(water_composition, 'temperature_celsius', default=25)}")
+        lines.append(f"    pH        {feed_ph}")
+        lines.append(f"    Na        {preload_na_mg_l:.1f}")
+        lines.append(f"    Cl        {preload_na_mg_l:.1f} charge")
+        lines.append("")
+
+        # Load pre-equilibrated porewater and exchanger (from Stage 1)
+        lines.append(f"USE solution 1-{2*cells}")
+        lines.append(f"USE exchange 1-{2*cells}")
+        lines.append("")
+
+        # Conditioning transport run (short)
+        conditioning_shifts = max(5, int(0.1 * shifts))  # ~10% of total shifts or minimum 5
+        lines.append("TRANSPORT")
+        lines.append(f"    -cells    {cells}")
+        lines.append(f"    -shifts   {conditioning_shifts}")
+        lines.append(f"    -lengths  {cell_length_m}")
+        lines.append(f"    -dispersivities {cells}*0.002")
+        lines.append(f"    -porosities {porosity}")
+        lines.append("    -flow_direction forward")
+        lines.append("    -boundary_conditions flux flux")
+        lines.append(f"    -stagnant 1 {alpha} {porosity * mobile_fraction} {porosity * (1 - mobile_fraction)}")
+        lines.append(f"    -print_frequency {max(1, cells//10)}")
+        lines.append(f"    -punch_frequency {max(1, cells//10)}")
+        lines.append(f"    -punch_cells {cells}")
+        lines.append("")
+
+        # Save conditioned state
+        lines.append(f"SAVE solution 1-{2*cells}")
+        lines.append(f"SAVE exchange 1-{2*cells}")
+        lines.append("")
+        lines.append("END")
+        lines.append("")
+
+        # Stage 3: Production transport using low-Na feed
+        lines.append("# Stage 3: Production transport with low-Na feed")
+
+        lines.append("SOLUTION 0  # Production feed (low Na)")
+        lines.append("    units     mg/L")
+        lines.append(f"    temp      {_get(water_composition, 'temperature_celsius', default=25)}")
+        lines.append(f"    pH        {_get(water_composition, 'pH', 'ph', default=7.8)}")
+        lines.append(f"    Ca        {_get(water_composition, 'ca_mg_l', default=0)}")
+        lines.append(f"    Mg        {_get(water_composition, 'mg_mg_l', default=0)}")
+        lines.append(f"    Na        {_get(water_composition, 'na_mg_l', 'Na_1+', 'Na_+', default=0)}")
+        lines.append(f"    K         {_get(water_composition, 'k_mg_l', default=0)}")
+        lines.append(f"    Cl        {_get(water_composition, 'cl_mg_l', 'Cl_1-', 'Cl_-', default=0)}")
+        lines.append(f"    C(4)      {_get(water_composition, 'hco3_mg_l', 'HCO3_1-', 'HCO3_-', default=0)} as HCO3")
+        lines.append(f"    S(6)      {_get(water_composition, 'so4_mg_l', 'SO4_2-', default=0)} as SO4")
+        lines.append("")
+
+        # Load conditioned state
+        lines.append(f"USE solution 1-{2*cells}")
+        lines.append(f"USE exchange 1-{2*cells}")
+        lines.append("")
+
+        # DUMP for debugging initial state (contiguous numbering)
+        lines.append("DUMP")
+        lines.append(f"    -solution 1-{2*cells}")
+        lines.append(f"    -exchange 1-{2*cells}")
+        lines.append("")
+
+        # Production transport with stagnant zones
+        lines.append("TRANSPORT")
+        lines.append(f"    -cells    {cells}")
+        lines.append(f"    -shifts   {shifts}")
+        lines.append(f"    -lengths  {cell_length_m}")
+        lines.append(f"    -dispersivities {cells}*0.002")
+        lines.append(f"    -porosities {porosity}")
+        lines.append("    -flow_direction forward")
+        lines.append("    -boundary_conditions flux flux")
+        lines.append(f"    -stagnant 1 {alpha} {porosity * mobile_fraction} {porosity * (1 - mobile_fraction)}")
+        lines.append(f"    -print_frequency {cells}")
+        lines.append(f"    -punch_frequency {cells}")
+        lines.append(f"    -punch_cells {cells}")
+        lines.append("")
+
+    # CO2 equilibrium for pH buffering (small finite amount)
+    if resin_form == 'H':
+        pass  # already added above
+    else:
+        pass  # Na-form does not use CO2 buffer in this template
 
     # Selected output
     lines.append("SELECTED_OUTPUT 1")
