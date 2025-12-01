@@ -1,0 +1,47 @@
+{
+  "_description": "Default calibration parameters for WAC H-form (Weak Acid Cation, Hydrogen form) resin",
+  "_notes": [
+    "WAC H-form used for dealkalizing/deionizing applications",
+    "pH-dependent capacity - operates best when feed pH > pKa + 2",
+    "Generates CO2 from alkalinity removal (HCO3- + H+ -> H2O + CO2)",
+    "Single-step acid regeneration (HCl or H2SO4)",
+    "Lower hardness leakage than SAC, but Na/K leakage occurs (2-8% of feed)"
+  ],
+
+  "_section_empirical_model": "Core empirical leakage model coefficients",
+  "capacity_factor": 0.92,
+  "regen_eff_eta": 0.95,
+  "leak_floor_a0": 0.2,
+  "leak_tds_slope_a1": 0.5,
+  "leak_regen_coeff_a2": 20.0,
+  "leak_regen_exponent_b": 1.3,
+
+  "_section_kinetics": "Mass transfer and kinetic parameters",
+  "k_ldf_25c": 35.0,
+  "ea_activation_kj_mol": 25.0,
+
+  "_section_operational": "Operational factors",
+  "channeling_factor": 1.0,
+  "aging_rate_per_cycle": 0.0008,
+  "cycles_operated": 0,
+  "pka_shift": 0.0,
+
+  "_section_designer_regeneration": "Designer levers: Regeneration configuration",
+  "regenerant_dose_g_per_l": 50.0,
+  "regen_flow_direction": "counter",
+  "slow_rinse_volume_bv": 0.5,
+  "fast_rinse_volume_bv": 1.5,
+
+  "_section_designer_service": "Designer levers: Service configuration",
+  "service_flow_bv_hr": 10.0,
+  "bed_depth_m": 1.5,
+
+  "_section_designer_resin": "Designer levers: Resin selection",
+  "resin_crosslinking_dvb": 8.0,
+  "resin_form": "gel",
+
+  "_section_na_k_leakage": "WAC H+ specific: Na/K leakage parameters",
+  "base_na_leakage_percent": 2.0,
+  "base_k_leakage_percent": 1.5,
+  "leakage_exhaustion_factor": 3.0
+}
