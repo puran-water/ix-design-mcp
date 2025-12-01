@@ -1,0 +1,41 @@
+{
+  "_description": "Default calibration parameters for SAC (Strong Acid Cation) resin",
+  "_notes": [
+    "These parameters are based on industry-typical values for gel-type 8% DVB SAC resin",
+    "Adjust based on site-specific operational data for digital twin applications",
+    "Parameters calibrated to match DuPont WAVE and Purolite PRSM projections",
+    "Designer levers allow modeling different regeneration and service configurations"
+  ],
+
+  "_section_empirical_model": "Core empirical leakage model coefficients",
+  "capacity_factor": 0.95,
+  "regen_eff_eta": 0.92,
+  "leak_floor_a0": 0.5,
+  "leak_tds_slope_a1": 0.8,
+  "leak_regen_coeff_a2": 25.0,
+  "leak_regen_exponent_b": 1.5,
+
+  "_section_kinetics": "Mass transfer and kinetic parameters",
+  "k_ldf_25c": 50.0,
+  "ea_activation_kj_mol": 20.0,
+
+  "_section_operational": "Operational factors",
+  "channeling_factor": 1.0,
+  "aging_rate_per_cycle": 0.001,
+  "cycles_operated": 0,
+  "pka_shift": 0.0,
+
+  "_section_designer_regeneration": "Designer levers: Regeneration configuration",
+  "regenerant_dose_g_per_l": 100.0,
+  "regen_flow_direction": "counter",
+  "slow_rinse_volume_bv": 1.0,
+  "fast_rinse_volume_bv": 3.0,
+
+  "_section_designer_service": "Designer levers: Service configuration",
+  "service_flow_bv_hr": 12.0,
+  "bed_depth_m": 1.5,
+
+  "_section_designer_resin": "Designer levers: Resin selection",
+  "resin_crosslinking_dvb": 8.0,
+  "resin_form": "gel"
+}

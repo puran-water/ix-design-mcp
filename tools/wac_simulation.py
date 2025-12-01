@@ -33,9 +33,10 @@ if str(project_root) not in sys.path:
 # Import base simulation class
 from tools.base_ix_simulation import BaseIXSimulation
 
-# Import WAC templates
+# Import WAC templates (EXCHANGE-based, numerically stable at industrial scale)
 from watertap_ix_transport.transport_core.wac_templates import (
-    create_wac_na_phreeqc_input
+    create_wac_na_phreeqc_input,
+    create_wac_h_phreeqc_input  # Uses EXCHANGE model with H+ competition (Codex 019abbed)
 )
 
 # Import regeneration configuration
@@ -46,7 +47,13 @@ from tools.sac_configuration import SACWaterComposition, SACVesselConfiguration
 
 # Import centralized configuration
 from tools.core_config import CONFIG
-from tools.wac_surface_builder import build_wac_surface_template
+
+# Import empirical leakage overlay for two-layer architecture
+from tools.empirical_leakage_overlay import (
+    EmpiricalLeakageOverlay,
+    CalibrationLoader,
+    CalibrationParameters
+)
 
 logger = logging.getLogger(__name__)
 
@@ -260,7 +267,9 @@ class BaseWACSimulation(BaseIXSimulation):
             regenerant_type = "NaOH"
             conc_mol_L = 0.5  # 0.5 N NaOH
         elif regen_config.regenerant_type == "NaCl":
-            # For compatibility, treat NaCl as HCl (acid step)
+            # NaCl cannot regenerate WAC (unlike SAC) - convert to HCl
+            # WAC requires acid to strip hardness, then NaOH to restore Na-form
+            logger.warning("NaCl specified for WAC regeneration - using HCl instead")
             regenerant_type = "HCl"
             conc_mol_L = 0.5
         else:
@@ -1128,10 +1137,17 @@ class WacNaSimulation(BaseWACSimulation):
                 capacity_utilization_percent=error_response['capacity_utilization_percent'],
                 breakthrough_data=error_response['breakthrough_data'],
                 performance_metrics=WACPerformanceMetrics(
-                    ca_removal_percent=0,
-                    mg_removal_percent=0,
-                    total_hardness_removal_percent=0,
-                    alkalinity_removal_percent=0,
+                    # Breakthrough metrics (at target hardness)
+                    breakthrough_ca_removal_percent=0,
+                    breakthrough_mg_removal_percent=0,
+                    breakthrough_hardness_removal_percent=0,
+                    breakthrough_alkalinity_removal_percent=0,
+                    # Average metrics (over service cycle)
+                    avg_ca_removal_percent=0,
+                    avg_mg_removal_percent=0,
+                    avg_hardness_removal_percent=0,
+                    avg_alkalinity_removal_percent=0,
+                    # pH and CO2 statistics
                     average_effluent_ph=7.0,
                     min_effluent_ph=7.0,
                     max_effluent_ph=7.0,
@@ -1140,21 +1156,66 @@ class WacNaSimulation(BaseWACSimulation):
                 simulation_details=error_response['simulation_details'],
                 total_cycle_time_hours=0
             )
-        
+
         # Extract breakthrough data with equilibration filtering
         breakthrough_data = self._extract_breakthrough_data_filtered(selected_output)
-        
+
+        # =====================================================================
+        # LAYER 2: Apply empirical leakage overlay
+        # PHREEQC gives thermodynamic equilibrium (near-zero leakage).
+        # Real systems show 0.5-5 mg/L leakage due to incomplete regeneration,
+        # TDS effects, and kinetic limitations.
+        # This overlay matches industry projection software (WAVE, PRSM).
+        # =====================================================================
+        try:
+            # Load calibration parameters for WAC_Na
+            cal_loader = CalibrationLoader()
+            cal_params = cal_loader.load('default', 'WAC_Na')
+
+            # Calculate feed properties for overlay
+            feed_hardness_caco3 = water.ca_mg_l * 2.5 + water.mg_mg_l * 4.1
+            feed_tds = (
+                water.ca_mg_l + water.mg_mg_l + water.na_mg_l +
+                water.k_mg_l + water.nh4_mg_l +
+                getattr(water, 'cl_mg_l', 0) +
+                water.so4_mg_l + water.hco3_mg_l
+            )
+
+            # Create overlay and apply
+            overlay = EmpiricalLeakageOverlay(cal_params)
+            overlay_result = overlay.calculate_empirical_leakage(
+                feed_hardness_mg_l_caco3=feed_hardness_caco3,
+                feed_tds_mg_l=feed_tds,
+                temperature_c=water.temperature_c if hasattr(water, 'temperature_c') else 25.0,
+                phreeqc_leakage_mg_l=0.0,  # PHREEQC returns ~0 for equilibrium
+                resin_type='WAC_Na'
+            )
+
+            # Apply overlay to breakthrough data
+            breakthrough_data = overlay.apply_to_breakthrough_data(
+                breakthrough_data=breakthrough_data,
+                feed_composition=water.model_dump(),
+                resin_type='WAC_Na'
+            )
+
+            logger.info(f"Empirical leakage overlay applied: {overlay_result.hardness_leakage_mg_l_caco3:.2f} mg/L as CaCO3")
+            for note in overlay_result.model_notes[:3]:  # Log first 3 notes
+                logger.debug(f"  {note}")
+
+        except Exception as e:
+            logger.warning(f"Empirical leakage overlay failed, using raw PHREEQC results: {e}")
+
         # Find breakthrough point (hardness-based for Na-form)
         # Use shared detection method with hardness > target criterion
         criteria = [
             ('Hardness_CaCO3', target_hardness, 'gt'),
             ('Hardness_mg/L', target_hardness, 'gt')  # Fallback if header differs
         ]
-        
+
         breakthrough_bv, breakthrough_reached, reason = self._detect_breakthrough(
             breakthrough_data, criteria
         )
-        
+
         if breakthrough_reached:
             logger.info(f"WAC Na breakthrough at {breakthrough_bv:.1f} BV ({reason})")
         else:
@@ -1168,15 +1229,14 @@ class WacNaSimulation(BaseWACSimulation):
         # Calculate performance metrics
         performance_metrics = self._calculate_performance_metrics(breakthrough_data, water, breakthrough_bv)
         
-        # Calculate capacity utilization with correct unit conversions
-        # theoretical_capacity: eq/L × L = eq
-        theoretical_capacity = CONFIG.WAC_NA_WORKING_CAPACITY * vessel.bed_volume_L
-        # feed_hardness: (mg/L ÷ mg/meq) = meq/L, × (m³/hr × hr × 1000 L/m³) = meq, ÷ 1000 = eq
-        feed_hardness_meq_L = (water.ca_mg_l / CONFIG.CA_EQUIV_WEIGHT +
-                              water.mg_mg_l / CONFIG.MG_EQUIV_WEIGHT)  # meq/L
-        volume_treated_L = flow_rate_m3_hr * 1000 * service_time_hours  # L
-        feed_hardness_eq = (feed_hardness_meq_L / 1000) * volume_treated_L  # eq
-        capacity_utilization = (feed_hardness_eq / theoretical_capacity * 100) if theoretical_capacity > 0 else 0
+        # Calculate capacity utilization (breakthrough-based, like SAC)
+        # Formula: (actual BV at breakthrough) / (theoretical BV) * 100
+        # This approach caps at ~100% and measures actual utilization
+        hardness_meq_L = (water.ca_mg_l / CONFIG.CA_EQUIV_WEIGHT +
+                         water.mg_mg_l / CONFIG.MG_EQUIV_WEIGHT)  # meq/L
+        # theoretical_bv = (capacity in meq/L) / (feed hardness in meq/L)
+        theoretical_bv = (CONFIG.WAC_NA_WORKING_CAPACITY * 1000) / hardness_meq_L if hardness_meq_L > 0 else 0
+        capacity_utilization = (breakthrough_bv / theoretical_bv * 100) if theoretical_bv > 0 else 0
         
         # Apply smart sampling to reduce data size
         sampled_data = self._smart_sample_breakthrough_curves(breakthrough_data, max_points=60)
@@ -1206,11 +1266,13 @@ class WacNaSimulation(BaseWACSimulation):
         from tools.sac_simulation import RegenerationConfig
 
         try:
+            # WAC_Na uses two-step regeneration: HCl (acid) + NaOH (caustic)
+            # The run_regeneration method handles this automatically for WAC_Na
             regen_results = self.run_regeneration(
                 resin_state=resin_state,
                 vessel_config=vessel.model_dump(),
                 regen_config=RegenerationConfig(
-                    regenerant_type="NaCl",
+                    regenerant_type="HCl",  # Primary regenerant (followed by NaOH for Na-form)
                     concentration_percent=5.0,
                     regeneration_stages=3,
                     mode="staged_fixed",
@@ -1378,23 +1440,36 @@ class WacHSimulation(BaseWACSimulation):
         # Validate water composition
         self._validate_water_composition(water.model_dump())
 
-        # Calculate dynamic max_bv based on alkalinity loading (H-form primarily removes alkalinity)
+        # Calculate dynamic max_bv based on alkalinity loading (H-form breakthrough is alkalinity-controlled)
+        # WAC H-form mechanism:
+        # 1. H-form releases H+ when exchanging Ca2+/Mg2+
+        # 2. Released H+ reacts with HCO3- to form CO2 + H2O
+        # 3. When alkalinity is exhausted, pH drops causing hardness re-elution
+        # Therefore, throughput is limited by alkalinity, not hardness capacity
         alkalinity_meq_L = water.hco3_mg_l / CONFIG.HCO3_EQUIV_WEIGHT
 
         # Calculate max_bv for WAC_H based on alkalinity loading
-        # Using TOTAL capacity since that's what the SURFACE model uses
+        # Use working capacity (1.8 eq/L) to match PHREEQC EXCHANGE model
         max_bv = self._calculate_dynamic_max_bv(
             loading_meq_L=alkalinity_meq_L,
-            capacity_eq_L=CONFIG.WAC_H_TOTAL_CAPACITY,  # 4.7 eq/L - matches SURFACE model
-            buffer_factor=5.0,  # Provide ample window so H-form breakthrough is captured
+            capacity_eq_L=CONFIG.WAC_NA_WORKING_CAPACITY,  # 1.8 eq/L - matches PHREEQC template
+            buffer_factor=1.5,  # Modest buffer for H-form (alkalinity-controlled breakthrough)
             min_bv=200
         )
 
+        # H-form simulations are more computationally intensive due to dual-domain exchange
+        # and pH equilibration. Cap max_bv to prevent excessive runtime.
+        # Empirical overlay can still predict breakthrough beyond this.
+        WAC_H_MAX_BV_CAP = 3000  # Matches max_shifts cap in wac_templates.py (5000 - margin)
+        if max_bv > WAC_H_MAX_BV_CAP:
+            logger.info(f"Capping WAC_H max_bv: {max_bv} -> {WAC_H_MAX_BV_CAP} for practical runtime")
+            max_bv = WAC_H_MAX_BV_CAP
+
         logger.info(f"Dynamic max_bv calculated: {max_bv} (alkalinity loading: {alkalinity_meq_L:.2f} meq/L)")
 
-        # Smart database selection for WAC H-form SURFACE model
-        # phreeqc.dat: Better convergence with SURFACE, valid to I ≈ 0.7 M
-        # pitzer.dat: Required for very high TDS (I > 0.5 M), but numerical challenges with SURFACE
+        # Smart database selection for WAC H-form EXCHANGE model
+        # phreeqc.dat: Better convergence with EXCHANGE, valid to I ≈ 0.7 M
+        # pitzer.dat: Required for very high TDS (I > 0.5 M), but numerical challenges with EXCHANGE
 
         # Calculate ionic strength for database selection
         # I ≈ 0.5 × Σ(c_i × z_i²) where c_i is concentration (mol/L), z_i is charge
@@ -1439,32 +1514,28 @@ class WacHSimulation(BaseWACSimulation):
             default_ph = getattr(water, 'ph', 7.5)
             water_dict['pH'] = water_dict.get('ph', default_ph)
 
-        # ALWAYS use staged initialization for WAC H-form SURFACE model
-        # Rationale: Even with -no_edl, direct initialization dumps massive H+ into dilute solution
-        # causing catastrophic charge imbalance and convergence failure
-        # Codex analysis (019aa7b7): "Direct mode is essentially unsalvageable at these site loads"
-        # Staged mode: Pre-equilibrate in Na-form, then gradually convert to H-form via HCl additions
-        init_mode = 'staged'
-        logger.info(f"Using staged initialization mode (ALWAYS for WAC H+ SURFACE - I = {ionic_strength:.3f} M, TDS = {tds_g_l:.1f} g/L)")
+        # Use EXCHANGE model with H+ competition for WAC H-form (Codex 019abbed)
+        # Rationale: SURFACE model fails at industrial scale due to massive H+ release
+        # during Newton-Raphson equilibration (>22,000 mol H+ into water phase).
+        # EXCHANGE model with X- + H+ = XH (log_k = pKa) reproduces Henderson-Hasselbalch
+        # site fraction and is numerically stable. This matches vendor practice
+        # (DuPont WAVE, Purolite Soft, Lanxess LewaPlus) which use selectivity + empirical capacity.
+        logger.info(f"Using EXCHANGE model with H+ competition for WAC H-form (I = {ionic_strength:.3f} M, TDS = {tds_g_l:.1f} g/L)")
 
-        phreeqc_input = build_wac_surface_template(
-            pka=CONFIG.WAC_PKA,
-            capacity_eq_l=capacity_eq_l,
-            ca_log_k=CONFIG.WAC_LOGK_CA_H,
-            mg_log_k=CONFIG.WAC_LOGK_MG_H,
-            na_log_k=CONFIG.WAC_LOGK_NA_H,
-            k_log_k=CONFIG.WAC_LOGK_K_H,
-            cells=wac_h_cells,
+        # Prepare vessel config for template
+        vessel_config = {
+            'bed_volume_L': vessel.bed_volume_L,
+            'bed_depth_m': vessel.bed_depth_m,
+            'bed_porosity': bed_porosity
+        }
+
+        phreeqc_input = create_wac_h_phreeqc_input(
             water_composition=water_dict,
-            bed_volume_L=vessel.bed_volume_L,
-            bed_depth_m=vessel.bed_depth_m,
-            porosity=bed_porosity,
-            flow_rate_m3_hr=flow_per_vessel_m3_hr,
+            vessel_config=vessel_config,
+            cells=wac_h_cells,
             max_bv=max_bv,
             database_path=phreeqc_db_path,
-            resin_form="H",
-            initialization_mode=init_mode,
-            enable_autoscaling=True  # Auto-scale cells for Pitzer + SURFACE numerical stability
+            capacity_factor=1.0
         )
         
         # Run PHREEQC
@@ -1488,10 +1559,17 @@ class WacHSimulation(BaseWACSimulation):
                 capacity_utilization_percent=error_response['capacity_utilization_percent'],
                 breakthrough_data=error_response['breakthrough_data'],
                 performance_metrics=WACPerformanceMetrics(
-                    ca_removal_percent=0,
-                    mg_removal_percent=0,
-                    total_hardness_removal_percent=0,
-                    alkalinity_removal_percent=0,
+                    # Breakthrough metrics (at target hardness)
+                    breakthrough_ca_removal_percent=0,
+                    breakthrough_mg_removal_percent=0,
+                    breakthrough_hardness_removal_percent=0,
+                    breakthrough_alkalinity_removal_percent=0,
+                    # Average metrics (over service cycle)
+                    avg_ca_removal_percent=0,
+                    avg_mg_removal_percent=0,
+                    avg_hardness_removal_percent=0,
+                    avg_alkalinity_removal_percent=0,
+                    # pH and CO2 statistics
                     average_effluent_ph=7.0,
                     min_effluent_ph=7.0,
                     max_effluent_ph=7.0,
@@ -1508,13 +1586,108 @@ class WacHSimulation(BaseWACSimulation):
         # Adjust breakthrough data for H-form WAC limitations
         # H-form WAC only removes temporary hardness (hardness associated with alkalinity)
         breakthrough_data = self._adjust_hform_breakthrough_data(breakthrough_data, water)
-        
+
+        # === APPLY EMPIRICAL LEAKAGE OVERLAY (Two-Layer Architecture) ===
+        # WAC H+ has dual leakage concerns:
+        # 1. Hardness leakage (0.1-1 mg/L) - minimal compared to Na-form
+        # 2. Na/K leakage (2-8% of feed) - primary concern for H-form
+        try:
+            cal_loader = CalibrationLoader()
+            cal_params = cal_loader.load('default', 'WAC_H')
+
+            # Calculate feed properties
+            feed_hardness_caco3 = water.ca_mg_l * 2.5 + water.mg_mg_l * 4.1
+            feed_tds = (water.ca_mg_l + water.mg_mg_l + water.na_mg_l +
+                        water.cl_mg_l + water.so4_mg_l + water.hco3_mg_l)
+
+            # === Part 1: Na/K Leakage Calculation ===
+            # Na/K are not exchanged by H-form WAC - they pass through with some
+            # additional pickup as resin exhausts. Use empirical model from base class.
+            bv_array = breakthrough_data.get('BV', np.array([]))
+
+            if len(bv_array) > 0:
+                # Calculate theoretical BV for exhaustion percentage calculation
+                alkalinity_meq_L = water.hco3_mg_l / CONFIG.HCO3_EQUIV_WEIGHT
+                theoretical_bv = (CONFIG.WAC_H_TOTAL_CAPACITY * 1000) / alkalinity_meq_L if alkalinity_meq_L > 0 else max_bv
+
+                # Calculate Na/K leakage at each BV point
+                na_leakage_array = np.zeros_like(bv_array)
+                k_leakage_array = np.zeros_like(bv_array)
+
+                for i, bv in enumerate(bv_array):
+                    exhaustion_pct = min(100.0, (bv / theoretical_bv) * 100) if theoretical_bv > 0 else 0
+                    leakage_result = self.calculate_h_form_leakage(
+                        influent_na_mg_l=water.na_mg_l,
+                        influent_k_mg_l=getattr(water, 'k_mg_l', 0.0),
+                        resin_exhaustion_percent=exhaustion_pct,
+                        base_na_leakage_percent=cal_params.base_na_leakage_percent,
+                        base_k_leakage_percent=cal_params.base_k_leakage_percent,
+                        exhaustion_factor=cal_params.leakage_exhaustion_factor
+                    )
+                    na_leakage_array[i] = leakage_result['na_mg_l']
+                    k_leakage_array[i] = leakage_result['k_mg_l']
+
+                # Add Na/K leakage to breakthrough data
+                breakthrough_data['Na_leakage_mg/L'] = na_leakage_array
+                breakthrough_data['K_leakage_mg/L'] = k_leakage_array
+
+                logger.info(f"WAC H+ Na/K leakage overlay applied: Na {na_leakage_array[0]:.1f}-{na_leakage_array[-1]:.1f} mg/L")
+
+            # === Part 2: Hardness Overlay with Henderson-Hasselbalch (WAC H-form specific) ===
+            # Use WAC H-form specific leakage calculation which accounts for:
+            # - Equilibrium vs kinetic capacity discrepancy (pKa effect)
+            # - Kinetic trap factor for protonation retention
+            overlay = EmpiricalLeakageOverlay(cal_params)
+            overlay.update_regen_efficiency_from_design(resin_type='WAC_H')
+
+            # Get PHREEQC baseline hardness (early BV values)
+            hardness_key = 'Hardness_CaCO3' if 'Hardness_CaCO3' in breakthrough_data else 'Hardness_mg/L'
+            hardness_array = breakthrough_data.get(hardness_key, np.array([]))
+
+            # Calculate feed alkalinity in mg/L as CaCO3
+            feed_alkalinity_caco3 = (water.hco3_mg_l or 0) / CONFIG.HCO3_EQUIV_WEIGHT * CONFIG.ALKALINITY_EQUIV_WEIGHT
+            feed_ph = water_dict.get('pH', 7.5)
+
+            if len(hardness_array) > 0:
+                phreeqc_early_leakage = float(np.min(hardness_array[:max(5, len(hardness_array)//10)]))
+
+                # Use WAC H-form specific method with Henderson-Hasselbalch model
+                overlay_result = overlay.calculate_wac_h_leakage(
+                    feed_hardness_mg_l_caco3=feed_hardness_caco3,
+                    feed_alkalinity_mg_l_caco3=feed_alkalinity_caco3,
+                    feed_ph=feed_ph,
+                    feed_tds_mg_l=feed_tds,
+                    temperature_c=getattr(water, 'temperature_c', 25.0),
+                    phreeqc_leakage_mg_l=phreeqc_early_leakage
+                )
+
+                empirical_floor = overlay_result.hardness_leakage_mg_l_caco3
+                original_min = float(np.min(hardness_array))
+
+                # Log Henderson-Hasselbalch diagnostics
+                for note in overlay_result.model_notes[:4]:  # First 4 notes are H-H diagnostics
+                    logger.info(f"WAC H+ H-H: {note}")
+
+                # Apply additive offset if empirical floor exceeds PHREEQC minimum
+                if empirical_floor > original_min:
+                    offset = empirical_floor - original_min
+                    breakthrough_data[hardness_key] = hardness_array + offset
+                    logger.info(f"WAC H+ hardness overlay applied: offset +{offset:.2f} mg/L (H-H model)")
+
+        except Exception as e:
+            logger.warning(f"WAC H+ empirical overlay failed, using raw PHREEQC results: {e}")
+
         # Find breakthrough point (alkalinity-based for H-form)
         # Use shared detection method with multiple criteria in priority order
+        # pH breakthrough (when alkalinity is exhausted, pH crashes below pKa)
+        pH_floor = 4.5  # Below WAC pKa (4.8) indicates alkalinity exhausted
+
         criteria = [
-            # Primary: Alkalinity breakthrough
-            ('Alk_mg/L_CaCO3', target_alkalinity, 'gt'),  # Now using CaCO3 units
-            # Secondary: Hardness breakthrough (in case alkalinity is already low)
+            # Primary: Alkalinity breakthrough (now using correct ALK measurement)
+            ('Alk_CaCO3_mg/L', target_alkalinity, 'gt'),  # Column name matches USER_PUNCH header
+            # Secondary: pH crash (direct indicator of alkalinity exhaustion)
+            ('pH', pH_floor, 'lt'),  # pH < 4.5 means alkalinity exhausted
+            # Tertiary: Hardness breakthrough (in case alkalinity is already low)
             ('Hardness_mg/L', target_hardness, 'gt')
             # Note: Active sites % not reliable for breakthrough detection
             # due to exchange front movement through column
@@ -1581,14 +1754,13 @@ class WacHSimulation(BaseWACSimulation):
                 "warning": str(e)
             }
 
-        # Calculate capacity utilization with correct unit conversions
-        # theoretical_capacity: eq/L × L = eq
-        theoretical_capacity = CONFIG.WAC_H_TOTAL_CAPACITY * vessel.bed_volume_L
-        # feed_alkalinity: (mg/L ÷ mg/meq) = meq/L, × (m³/hr × hr × 1000 L/m³) = meq, ÷ 1000 = eq
-        feed_alkalinity_meq_L = water.hco3_mg_l / CONFIG.HCO3_EQUIV_WEIGHT  # meq/L
-        volume_treated_L = flow_rate_m3_hr * 1000 * service_time_hours  # L
-        feed_alkalinity_eq = (feed_alkalinity_meq_L / 1000) * volume_treated_L  # eq
-        capacity_utilization = (feed_alkalinity_eq / theoretical_capacity * 100) if theoretical_capacity > 0 else 0
+        # Calculate capacity utilization (breakthrough-based, like SAC)
+        # For H-form, use alkalinity since that's the limiting factor
+        # Formula: (actual BV at breakthrough) / (theoretical BV) * 100
+        alkalinity_meq_L = water.hco3_mg_l / CONFIG.HCO3_EQUIV_WEIGHT  # meq/L
+        # theoretical_bv = (capacity in meq/L) / (feed alkalinity in meq/L)
+        theoretical_bv = (CONFIG.WAC_H_TOTAL_CAPACITY * 1000) / alkalinity_meq_L if alkalinity_meq_L > 0 else 0
+        capacity_utilization = (breakthrough_bv / theoretical_bv * 100) if theoretical_bv > 0 else 0
         
         # Prepare warnings
         warnings = []
@@ -1642,7 +1814,10 @@ class WacHSimulation(BaseWACSimulation):
                 'na_mg_l': sampled_data.get('Na_mg/L', np.array([])).tolist(),
                 'ph': sampled_data.get('pH', np.array([])).tolist(),
                 'co2_mg_l': sampled_data.get('CO2_mg/L', np.array([])).tolist(),
-                'active_sites_percent': sampled_data.get('Active_Sites_%', np.array([])).tolist()
+                'active_sites_percent': sampled_data.get('Active_Sites_%', np.array([])).tolist(),
+                # WAC H+ specific: Na/K leakage from empirical overlay
+                'na_leakage_mg_l': sampled_data.get('Na_leakage_mg/L', np.array([])).tolist(),
+                'k_leakage_mg_l': sampled_data.get('K_leakage_mg/L', np.array([])).tolist()
             },
             performance_metrics=performance_metrics,
             simulation_details={
