@@ -124,6 +124,30 @@ This two-layer architecture mirrors commercial IX software:
 
 Pure thermodynamic models cannot capture WAC H-form behavior because the process is inherently non-equilibrium. The kinetic trap factor bridges this gap.
 
+### Known Limitations (Codex Review 2025-12-01)
+
+**PHREEQC Layer Artifacts:**
+- Uses reduced pKa (2.5) instead of true pKa (4.8) for Newton-Raphson convergence stability
+- At pH 3.0 conditioning with pKa 2.5: only ~24% of sites start protonated
+- Results in partial hardness removal (~50-70%) from initial H inventory exhaustion
+- Breakthrough at ~1 BV is an artifact of under-acidified resin, not physical behavior
+- **Do NOT use raw PHREEQC hardness removal or breakthrough values for sizing**
+
+**Authoritative Values:**
+
+| Metric | Source | Use For |
+|--------|--------|---------|
+| Breakthrough BV | Overlay (ktf-adjusted) | Sizing, service life |
+| Leakage mg/L | Overlay (H-H model) | Water quality prediction |
+| Capacity eq/L | Overlay (4.0 with ktf=0.85) | Regenerant dosing |
+| pH trends | PHREEQC (qualitative) | Front shape, speciation trends |
+| Absolute pH | Neither (biased by reduced pKa) | Requires pilot validation |
+
+**Future Improvements:**
+1. **Option A**: Restore true pKa (4.8) with NR damping/convergence fixes
+2. **Option B**: Initialize PHREEQC with 100% HX explicitly, decouple from pH equilibration
+3. Label PHREEQC hardness removal as "artifact" in outputs to prevent misinterpretation
+
 ---
 
 ## Kinetic HX Displacement Test Results (2025-11-28)
