@@ -61,9 +61,15 @@ def run_ix_simulation(
         flow = simulation_input.get('water', {}).get('flow_m3h', 0)
         logger.info(f"Resin type: {resin_type}, Flow: {flow} m³/hr")
 
-        # Import simulation module
+        # Import simulation module (with exception handling for WSL/Windows issues)
         logger.info("Loading simulation modules...")
-        from tools.simulate_ix_hybrid import simulate_ix_hybrid
+        sys.stderr.flush()  # Ensure log is written before potential hang
+        try:
+            from tools.simulate_ix_hybrid import simulate_ix_hybrid
+        except Exception as e:
+            logger.critical(f"Failed to import simulate_ix_hybrid: {e}", exc_info=True)
+            sys.stderr.flush()
+            raise
 
         # Run simulation (no timeout - runs to completion)
         logger.info("Starting IX simulation (running to completion)...")

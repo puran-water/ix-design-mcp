@@ -449,10 +449,11 @@ class IXWaterTAPWrapper:
                 "WaterTAP is required for hybrid simulation. "
                 "Install with: pip install watertap>=0.11.0"
             )
-        
+
         self.model = None
         self.flowsheet = None
         self.phreeqc_results = None
+        self.pricing = {}  # Store pricing parameters for LCOW calculation
     
     def build_flowsheet(
         self,
@@ -867,6 +868,9 @@ class IXWaterTAPWrapper:
     def _add_ix_costing(self, pricing: Optional[Dict[str, float]] = None):
         """Add EPA-WBS IX costing using WaterTAP's cost_ion_exchange function."""
         m = self.model
+
+        # Store pricing parameters for LCOW calculation
+        self.pricing = pricing or {}
         
         # Configurable pump parameters
         PUMP_CONFIG = {
@@ -1062,9 +1066,24 @@ class IXWaterTAPWrapper:
         # Calculate LCOW - use WaterTAP's value if available
         if hasattr(m.fs.costing, 'LCOW'):
             lcow = value(m.fs.costing.LCOW)
+            crf = None  # WaterTAP handles CRF internally
+            discount_rate = None
+            plant_lifetime = None
         else:
-            flow_m3_year = value(m.fs.ix_unit.service_flow_rate) * 8760 * 0.9  # 90% availability
-            crf = 0.1  # Capital recovery factor (10% for 10 years)
+            # Use schema parameters if provided, else defaults
+            # CRF formula: r(1+r)^n / ((1+r)^n - 1)
+            discount_rate = self.pricing.get('discount_rate', 0.08)
+            plant_lifetime = self.pricing.get('plant_lifetime_years', 20)
+            availability = self.pricing.get('availability', 0.9)
+
+            if discount_rate <= 0:
+                crf = 1.0 / plant_lifetime if plant_lifetime > 0 else 0.1
+            else:
+                crf = discount_rate * (1 + discount_rate) ** plant_lifetime / (
+                    (1 + discount_rate) ** plant_lifetime - 1
+                )
+
+            flow_m3_year = value(m.fs.ix_unit.service_flow_rate) * 8760 * availability
             lcow = (total_capital_cost * crf + total_operating_cost) / flow_m3_year if flow_m3_year > 0 else 0
         
         # Calculate SEC (Specific Energy Consumption)
@@ -1083,6 +1102,9 @@ class IXWaterTAPWrapper:
             'resin_replacement_cost_usd_year': resin_replacement_cost,
             'energy_cost_usd_year': energy_cost,
             'lcow_usd_m3': lcow,
+            'crf': crf,
+            'discount_rate': discount_rate,
+            'plant_lifetime_years': plant_lifetime,
             'sec_kwh_m3': sec,
             'pumping_power_kw': avg_pump_power_kw,
             'unit_costs': {

@@ -1772,6 +1772,9 @@ class WacHSimulation(BaseWACSimulation):
         if performance_metrics.co2_generation_mg_l > 50:
             warnings.append("High CO2 generation - decarbonator recommended")
         
+        # H-form PHREEQC limitation (apply once here in the H-form branch)
+        warnings.append("WAC H-form: PHREEQC breakthrough BV is an artifact (reduced pKa 2.5 vs true 4.8). Use empirical overlay capacity for sizing.")
+        
         # Apply smart sampling to reduce data size
         sampled_data = self._smart_sample_breakthrough_curves(breakthrough_data, max_points=60)
         

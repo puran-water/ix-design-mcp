@@ -19,6 +19,7 @@ from .core_config import CONFIG
 # Import hydraulics calculations
 from .hydraulics import (
     calculate_system_hydraulics,
+    validate_vessel_hydraulics,
     STANDARD_WAC_RESIN,
     HydraulicResult
 )
@@ -290,6 +291,29 @@ def configure_wac_vessel(input_data: WACConfigurationInput) -> WACConfigurationO
         # Get knowledge-based configuration
         kb_config = configurator.configure_wac_h(water_dict, target_alkalinity or 10.0)
 
+        # Validate hydraulics for KB path (crucial - bypasses normal validation)
+        _, hydraulic_warnings = validate_vessel_hydraulics(
+            flow_m3_hr=water.flow_m3_hr,
+            diameter_m=kb_config['vessel']['diameter_m'],
+            bed_depth_m=kb_config['vessel']['bed_depth_m'],
+            n_vessels=1
+        )
+
+        # Calculate full hydraulic analysis for KB path
+        kb_hydraulic_result = calculate_system_hydraulics(
+            bed_depth_m=kb_config['vessel']['bed_depth_m'],
+            bed_diameter_m=kb_config['vessel']['diameter_m'],
+            service_flow_m3_h=water.flow_m3_hr,
+            backwash_flow_m3_h=water.flow_m3_hr * 1.75,  # 175% for H-form expansion
+            resin_props=STANDARD_WAC_RESIN,
+            temperature_c=water.temperature_celsius,
+            freeboard_safety_factor=1.5
+        )
+
+        # Calculate linear velocity for HydraulicAnalysis
+        kb_area_m2 = math.pi * (kb_config['vessel']['diameter_m'] / 2) ** 2
+        kb_linear_velocity = water.flow_m3_hr / kb_area_m2
+
         # Convert to WACConfigurationOutput format
         vessel_config = WACVesselConfiguration(
             resin_type=resin_type,  # Add resin_type field
@@ -337,6 +361,36 @@ def configure_wac_vessel(input_data: WACConfigurationInput) -> WACConfigurationO
             waste_volume_m3=regen.get('waste_volume_m3')
         )
 
+        # Build design notes including any hydraulic warnings
+        kb_design_notes = [
+            f"Knowledge-based configuration (PHREEQC bypassed)",
+            f"Breakthrough: {perf['breakthrough_BV']:.0f} BV for alkalinity",
+            f"Operating capacity: {perf['operating_capacity_eq_L']:.2f} eq/L",
+            f"pH floor: {perf.get('pH_profile', {}).get('pH_floor', 4.5):.2f} (from {target_alkalinity:.0f} mg/L target)",
+            f"pH-dependent capacity fraction: {perf.get('pH_dependent_fraction', 0):.2%}",
+            f"Effluent alkalinity: {perf.get('alkalinity_effluent_mg_L', target_alkalinity):.1f} mg/L",
+            f"CO2 generation: {perf.get('CO2_generation_mg_L', 0):.0f} mg/L",
+            f"Run length: {perf['run_length_hrs']:.1f} hours"
+        ]
+        # Add hydraulic warnings prominently at top
+        if hydraulic_warnings:
+            kb_design_notes = hydraulic_warnings + kb_design_notes
+
+        # Build HydraulicAnalysis from calculated results
+        kb_hydraulic_analysis = HydraulicAnalysis(
+            pressure_drop_service_kpa=kb_hydraulic_result.pressure_drop_service_kpa,
+            pressure_drop_backwash_kpa=kb_hydraulic_result.pressure_drop_backwash_kpa,
+            bed_expansion_percent=kb_hydraulic_result.bed_expansion_percent,
+            expanded_bed_depth_m=kb_hydraulic_result.expanded_bed_depth_m,
+            required_freeboard_m=kb_hydraulic_result.required_freeboard_m,
+            distributor_headloss_kpa=kb_hydraulic_result.distributor_headloss_kpa,
+            nozzle_velocity_m_s=kb_hydraulic_result.nozzle_velocity_m_s,
+            linear_velocity_m_hr=kb_linear_velocity,
+            velocity_in_range=kb_hydraulic_result.velocity_in_range,
+            expansion_acceptable=kb_hydraulic_result.expansion_acceptable,
+            warnings=kb_hydraulic_result.warnings + hydraulic_warnings
+        )
+
         return WACConfigurationOutput(
             vessel_configuration=vessel_config,
             water_analysis=water,
@@ -346,17 +400,8 @@ def configure_wac_vessel(input_data: WACConfigurationInput) -> WACConfigurationO
             service_performance=service_performance,
             regeneration_parameters=kb_config['regeneration'],
             regeneration_performance=regeneration_performance,
-            hydraulic_analysis=None,  # Not calculated in knowledge-based path
-            design_notes=[
-                f"Knowledge-based configuration (PHREEQC bypassed)",
-                f"Breakthrough: {perf['breakthrough_BV']:.0f} BV for alkalinity",
-                f"Operating capacity: {perf['operating_capacity_eq_L']:.2f} eq/L",
-                f"pH floor: {perf.get('pH_profile', {}).get('pH_floor', 4.5):.2f} (from {target_alkalinity:.0f} mg/L target)",
-                f"pH-dependent capacity fraction: {perf.get('pH_dependent_fraction', 0):.2%}",
-                f"Effluent alkalinity: {perf.get('alkalinity_effluent_mg_L', target_alkalinity):.1f} mg/L",
-                f"CO2 generation: {perf.get('CO2_generation_mg_L', 0):.0f} mg/L",
-                f"Run length: {perf['run_length_hrs']:.1f} hours"
-            ],
+            hydraulic_analysis=kb_hydraulic_analysis,
+            design_notes=kb_design_notes,
             water_chemistry_notes=kb_config.get('warnings', []),
             calculation_method="knowledge_based"
         )

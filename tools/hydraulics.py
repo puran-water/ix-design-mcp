@@ -19,7 +19,7 @@ References:
 """
 
 from dataclasses import dataclass
-from typing import Optional, Tuple
+from typing import Optional, Tuple, List
 import math
 import logging
 
@@ -380,3 +380,72 @@ STANDARD_WAC_RESIN = ResinProperties(
     bed_porosity=0.42,  # Higher porosity
     sphericity=0.93  # Slightly less spherical
 )
+
+
+def validate_vessel_hydraulics(
+    flow_m3_hr: float,
+    diameter_m: float,
+    bed_depth_m: float,
+    n_vessels: int = 1
+) -> Tuple[bool, List[str]]:
+    """
+    Validate vessel configuration against design constraints.
+
+    Checks against AWWA B100 and industry best practices:
+    - Linear velocity: 5-40 m/hr (recommended 10-25 m/hr)
+    - Bed depth: minimum 0.75 m
+    - Vessel diameter: maximum 2.4 m (shipping constraint)
+
+    Args:
+        flow_m3_hr: Feed water flow rate in m³/hr
+        diameter_m: Vessel internal diameter in meters
+        bed_depth_m: Resin bed depth in meters
+        n_vessels: Number of vessels in service (default 1)
+
+    Returns:
+        Tuple of (is_valid, warnings_list):
+        - is_valid: True if no blocking violations (AWWA limits)
+        - warnings_list: List of warning/error messages
+    """
+    warnings = []
+
+    # Calculate linear velocity
+    area_m2 = math.pi * (diameter_m / 2) ** 2
+    velocity_m_hr = flow_m3_hr / n_vessels / area_m2
+
+    # Velocity validation
+    if velocity_m_hr > 40.0:
+        warnings.append(
+            f"LINEAR VELOCITY {velocity_m_hr:.1f} m/hr EXCEEDS AWWA B100 MAXIMUM (40 m/hr) - "
+            "increase vessel diameter or add more vessels"
+        )
+    elif velocity_m_hr > 25.0:
+        warnings.append(
+            f"Linear velocity {velocity_m_hr:.1f} m/hr exceeds recommended maximum (25 m/hr) - "
+            "consider larger vessel diameter"
+        )
+    elif velocity_m_hr < 5.0:
+        warnings.append(
+            f"Linear velocity {velocity_m_hr:.1f} m/hr below recommended minimum (5 m/hr) - "
+            "risk of maldistribution and channeling"
+        )
+
+    # Bed depth validation
+    if bed_depth_m < 0.75:
+        warnings.append(
+            f"Bed depth {bed_depth_m:.2f} m BELOW MINIMUM (0.75 m) - "
+            "increase bed depth for adequate contact time"
+        )
+
+    # Diameter validation (shipping constraint)
+    if diameter_m > 2.4:
+        warnings.append(
+            f"Vessel diameter {diameter_m:.2f} m exceeds shipping constraint (2.4 m) - "
+            "consider multiple smaller vessels"
+        )
+
+    # Determine if valid (no blocking violations)
+    # Blocking = exceeds AWWA max velocity OR bed depth below minimum
+    is_valid = velocity_m_hr <= 40.0 and bed_depth_m >= 0.75
+
+    return is_valid, warnings
