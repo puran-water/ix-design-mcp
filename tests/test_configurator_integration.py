@@ -128,7 +128,7 @@ class TestWACConfiguratorIntegration:
         """Test that configure_wac_vessel (H form) uses knowledge-based calculation.
 
         Note: WAC_H uses knowledge-based calculation (not PHREEQC),
-        so hydraulic_analysis is None. This is expected behavior.
+        but still populates hydraulic_analysis for design validation.
         """
         input_data = WACConfigurationInput(
             water_analysis=WACWaterComposition(
@@ -146,11 +146,14 @@ class TestWACConfiguratorIntegration:
         )
         result = configure_wac_vessel(input_data)
 
-        # WAC_H uses knowledge-based calculation, so hydraulic_analysis is None
+        # WAC_H uses knowledge-based calculation
         assert result.calculation_method == "knowledge_based"
-        assert result.hydraulic_analysis is None
 
-        # But vessel configuration should still be valid
+        # But still includes hydraulic_analysis for design validation
+        assert result.hydraulic_analysis is not None
+        assert result.hydraulic_analysis.velocity_in_range is True
+
+        # Vessel configuration should be valid
         assert result.vessel_configuration.bed_depth_m > 0
         assert result.vessel_configuration.freeboard_m > 0
 

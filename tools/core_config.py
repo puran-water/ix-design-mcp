@@ -9,10 +9,46 @@ from dataclasses import dataclass
 from pathlib import Path
 import os
 import sys
+import threading
 from typing import Optional, Dict
 import logging
 
 logger = logging.getLogger(__name__)
+
+
+def _path_exists_with_timeout(path: Path, timeout: int = 5) -> bool:
+    """Check if path exists with timeout to prevent WSL/Windows hangs.
+
+    In WSL, accessing Windows paths via Path.exists() can hang indefinitely
+    if the Windows filesystem is slow to respond. This wraps the check in
+    a timeout to prevent blocking the entire process.
+    """
+    try:
+        result = [False]
+        exception = [None]
+
+        def check():
+            try:
+                result[0] = path.exists()
+            except Exception as e:
+                exception[0] = e
+
+        t = threading.Thread(target=check, daemon=True)
+        t.start()
+        t.join(timeout=timeout)
+
+        if t.is_alive():
+            logger.warning(f"Path existence check timed out after {timeout}s: {path}")
+            return False
+
+        if exception[0]:
+            logger.warning(f"Path existence check failed: {exception[0]}")
+            return False
+
+        return result[0]
+    except Exception as e:
+        logger.warning(f"_path_exists_with_timeout error: {e}")
+        return False
 
 # Get project root with robust approach
 def get_project_root() -> Path:
@@ -155,6 +191,15 @@ class CoreConfig:
     DEFAULT_TOLERANCE: float = 1e-6  # Numerical tolerance for convergence
     DEFAULT_CELLS: int = 8  # Number of cells for column discretization
     DEFAULT_MAX_BV: int = 200  # Maximum bed volumes to simulate
+
+    # Economics defaults (unified across all code paths)
+    DEFAULT_DISCOUNT_RATE: float = 0.08  # 8% discount rate for CRF
+    DEFAULT_PLANT_LIFETIME_YEARS: int = 20  # Plant lifetime for LCOW
+    DEFAULT_PUMP_EFFICIENCY: float = 0.70  # 70% pump efficiency
+    DEFAULT_AVAILABILITY: float = 0.90  # 90% uptime
+
+    # SAC transport mode
+    SAC_USE_DUAL_DOMAIN: bool = True  # Set False to use legacy single-domain
 
     # Dynamic BV calculation safety limits
     # These are EXTREME safety caps for pathological bugs only - NOT operational limits
@@ -428,34 +473,50 @@ def verify_merged_database(db_path: Path):
 
 
 # Validation functions
+_config_validated = False
+
+
 def validate_config():
     """
     Validate configuration values are reasonable.
-    Called on module import to catch configuration errors early.
+    Uses timeout-protected path checks to prevent WSL/Windows hangs.
     """
+    global _config_validated
+    if _config_validated:
+        return  # Already validated
+
     # Check physical constants
     assert CONFIG.RESIN_CAPACITY_EQ_L > 0, "Resin capacity must be positive"
     assert 0 < CONFIG.BED_POROSITY < 1, "Bed porosity must be between 0 and 1"
-    
+
     # Check design parameters
     assert CONFIG.MAX_BED_VOLUME_PER_HOUR > 0, "Max BV/hr must be positive"
     assert CONFIG.MAX_LINEAR_VELOCITY_M_HR > 0, "Max velocity must be positive"
     assert CONFIG.MIN_BED_DEPTH_M > 0, "Min bed depth must be positive"
     assert CONFIG.FREEBOARD_PERCENT >= 0, "Freeboard must be non-negative"
     assert CONFIG.MAX_VESSEL_DIAMETER_M > 0, "Max diameter must be positive"
-    
+
     # Check equivalent weights
     for attr_name in dir(CONFIG):
         if attr_name.endswith('_EQUIV_WEIGHT'):
             value = getattr(CONFIG, attr_name)
             assert value > 0, f"{attr_name} must be positive"
-    
-    # Check paths exist or can be created
+
+    # Check paths exist (with timeout to prevent WSL/Windows hangs)
     phreeqc_exe = CONFIG.get_phreeqc_exe()
-    if not phreeqc_exe.exists():
+    if not _path_exists_with_timeout(phreeqc_exe, timeout=5):
         import warnings
         warnings.warn(f"PHREEQC executable not found at {phreeqc_exe}. Set PHREEQC_EXE environment variable.")
 
+    _config_validated = True
+    logger.debug("Configuration validated successfully")
 
-# Run validation on import
-validate_config()
+
+def ensure_config_validated():
+    """Ensure configuration is validated before use. Call this lazily when CONFIG is first accessed."""
+    if not _config_validated:
+        validate_config()
+
+
+# NOTE: validate_config() is NO LONGER called on import to prevent WSL/Windows hangs.
+# Call ensure_config_validated() explicitly when using CONFIG for critical operations.

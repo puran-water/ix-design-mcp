@@ -48,6 +48,9 @@ from utils.schemas import (
 # Import artifact manager
 from utils.artifacts import get_artifact_manager
 
+# Import unified economics calculator
+from tools.ix_economics import IXEconomicsCalculator
+
 # Defer WaterTAP wrapper import to runtime for graceful degradation
 
 # Import existing PHREEQC tools
@@ -553,47 +556,77 @@ def estimate_costs_from_phreeqc(
 ) -> Dict[str, Any]:
     """
     Estimate costs from PHREEQC results when WaterTAP solve fails.
-    
+
+    Uses unified IXEconomicsCalculator to ensure consistent CRF and LCOW
+    calculations across all code paths.
+
     Args:
         phreeqc_results: Results from PHREEQC simulation
         ix_input: Original input parameters
-        
+
     Returns:
         Estimated economics dictionary
     """
+    import math
+
     # Extract key parameters
     vessel = ix_input.vessel
     pricing = ix_input.pricing
     regen = phreeqc_results.get("regeneration_results") or {}
 
-    # Capital costs (simplified correlations)
+    # Initialize unified economics calculator
+    calc = IXEconomicsCalculator(pricing)
+
+    # Calculate resin volume
     resin_volume_m3 = vessel.resin_volume_m3 or (
-        3.14159 * (vessel.diameter_m/2)**2 * vessel.bed_depth_m
+        math.pi * (vessel.diameter_m/2)**2 * vessel.bed_depth_m
     )
 
-    vessel_cost = 50000 * (resin_volume_m3 ** 0.7)
-    resin_cost = (pricing.resin_usd_m3 if pricing else 2800) * resin_volume_m3
-    pump_cost = 15000  # Fixed estimate
-    instrumentation = (vessel_cost + resin_cost) * 0.15
+    # Estimate vessel height (bed + freeboard)
+    vessel_height_m = vessel.bed_depth_m * 1.5  # Add 50% for freeboard
+    n_vessels = vessel.number_in_service + 1  # Assume N+1 redundancy
 
-    total_capital = (vessel_cost + resin_cost + pump_cost + instrumentation) * 2.5
+    # Calculate CAPEX using EPA-WBS correlations
+    vessel_cost = calc.calculate_vessel_capex(vessel.diameter_m, vessel_height_m, n_vessels)
+    resin_cost = calc.calculate_resin_capex(resin_volume_m3)
+    pump_cost = calc.calculate_pump_capex(ix_input.water.flow_m3h)
 
-    # Operating costs (annual) - with safety checks for missing regeneration data
+    total_capital, capex_breakdown = calc.calculate_total_capex(
+        vessel_cost, resin_cost, pump_cost
+    )
+
+    # Calculate OPEX
     regenerant_kg = regen.get("regenerant_consumed_kg", 100) if regen else 100
     cycle_hours = regen.get("total_cycle_time_hours", 24) if regen else 24
-    cycles_per_year = 8760 / cycle_hours
-    
-    regenerant_cost = regenerant_kg * cycles_per_year * (pricing.nacl_usd_kg if pricing else 0.12)
-    resin_replacement = resin_cost * (pricing.resin_replacement_rate if pricing else 0.05)
-    energy_cost = ix_input.water.flow_m3h * 8760 * 0.05 * (pricing.electricity_usd_kwh if pricing else 0.07)
-    
-    total_opex = regenerant_cost + resin_replacement + energy_cost
-    
-    # Calculate LCOW
-    crf = 0.1  # Capital recovery factor (simplified)
-    annual_production = ix_input.water.flow_m3h * 8760 * 0.9  # 90% availability
-    lcow = (total_capital * crf + total_opex) / annual_production
-    
+    cycles_per_year = 8760 * calc.config.availability / cycle_hours
+
+    # Use cycle configuration for regenerant type
+    regenerant_type = "NaCl"
+    if hasattr(ix_input, 'cycle') and ix_input.cycle:
+        regenerant_type = getattr(ix_input.cycle, 'regenerant_type', 'NaCl')
+
+    regenerant_cost = calc.calculate_regenerant_cost_annual(
+        regenerant_type, regenerant_kg, cycles_per_year
+    )
+
+    resin_replacement = calc.calculate_resin_replacement_cost_annual(resin_cost)
+
+    # Calculate pump power and energy cost
+    pressure_drop_bar = 0.6  # Default pressure drop
+    pump_power = calc.calculate_pump_power_kw(ix_input.water.flow_m3h, pressure_drop_bar)
+    energy_cost = calc.calculate_energy_cost_annual(pump_power)
+
+    total_opex, opex_breakdown = calc.calculate_total_opex(
+        energy_cost, regenerant_cost, resin_replacement, capex=total_capital
+    )
+
+    # Calculate LCOW using schema parameters (discount_rate, plant_lifetime_years)
+    annual_production = calc.calculate_annual_production_m3(ix_input.water.flow_m3h)
+    lcow = calc.calculate_lcow(total_capital, total_opex, annual_production)
+
+    # Specific energy consumption
+    sec = pump_power / ix_input.water.flow_m3h if ix_input.water.flow_m3h > 0 else 0.05
+
     return {
         "capital_cost_usd": total_capital,
         "operating_cost_usd_year": total_opex,
@@ -601,14 +634,19 @@ def estimate_costs_from_phreeqc(
         "resin_replacement_cost_usd_year": resin_replacement,
         "energy_cost_usd_year": energy_cost,
         "lcow_usd_m3": lcow,
-        "sec_kwh_m3": 0.05,  # Default estimate
+        "sec_kwh_m3": sec,
         "unit_costs": {
             "vessels_usd": vessel_cost,
             "resin_initial_usd": resin_cost,
             "pumps_usd": pump_cost,
-            "instrumentation_usd": instrumentation,
-            "installation_factor": 2.5
-        }
+            "instrumentation_usd": capex_breakdown.get("instrumentation_usd", 0),
+            "installation_factor": calc.config.installation_factor
+        },
+        "economics_notes": [
+            f"CRF calculated using discount_rate={calc.config.discount_rate:.1%}, lifetime={calc.config.plant_lifetime_years}yr",
+            f"CRF value: {calc.calculate_crf():.4f}",
+            "EPA-WBS correlations used for vessel and equipment costing"
+        ]
     }
 
 

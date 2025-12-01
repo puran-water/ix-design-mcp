@@ -128,9 +128,9 @@ Pure thermodynamic models cannot capture WAC H-form behavior because the process
 
 **PHREEQC Layer Artifacts:**
 - Uses reduced pKa (2.5) instead of true pKa (4.8) for Newton-Raphson convergence stability
-- At pH 3.0 conditioning with pKa 2.5: only ~24% of sites start protonated
-- Results in partial hardness removal (~50-70%) from initial H inventory exhaustion
-- Breakthrough at ~1 BV is an artifact of under-acidified resin, not physical behavior
+- Initialization now forces HX with strong-acid placeholder (pH ~0.5, explicit HX load); previous pH 3.0 conditioning underloaded the resin (~24% protonated)
+- Even with full HX load, equilibrium log_k=2.5 collapses capacity at feed pH 7.8; hardness removal in PHREEQC remains a kinetic-trap artifact
+- Breakthrough at ~1 BV from the PHREEQC layer is still non-physical and should not be used for sizing
 - **Do NOT use raw PHREEQC hardness removal or breakthrough values for sizing**
 
 **Authoritative Values:**
@@ -145,7 +145,7 @@ Pure thermodynamic models cannot capture WAC H-form behavior because the process
 
 **Future Improvements:**
 1. **Option A**: Restore true pKa (4.8) with NR damping/convergence fixes
-2. **Option B**: Initialize PHREEQC with 100% HX explicitly, decouple from pH equilibration
+2. **Option B (implemented)**: Force PHREEQC initialization to 100% HX (strong-acid placeholder) to remove under-acid artifact
 3. Label PHREEQC hardness removal as "artifact" in outputs to prevent misinterpretation
 
 ---

@@ -16,6 +16,7 @@ from tools.hydraulics import (
     calculate_bed_expansion,
     calculate_distributor_headloss,
     calculate_system_hydraulics,
+    validate_vessel_hydraulics,
     STANDARD_SAC_RESIN,
     STANDARD_WAC_RESIN,
     ResinProperties,
@@ -636,3 +637,382 @@ class TestPhysicalConstants:
 
         # Gravity should be positive
         assert GRAVITY_M_S2 > 0
+
+
+# =============================================================================
+# Tests for validate_vessel_hydraulics() - AWWA B100 compliance validation
+# =============================================================================
+
+class TestValidateVesselHydraulics:
+    """Test suite for validate_vessel_hydraulics() function."""
+
+    def test_velocity_within_optimal_range(self):
+        """Velocity 10-25 m/hr should pass with no warnings."""
+        # For 2.0 m diameter: area = π × 1² = 3.14159 m²
+        # 15 m/hr velocity: flow = 15 × 3.14159 = 47.1 m³/hr
+        diameter = 2.0
+        area = math.pi * (diameter / 2) ** 2
+        target_velocity = 15.0  # m/hr - middle of optimal range
+        flow = target_velocity * area
+
+        is_valid, warnings = validate_vessel_hydraulics(
+            flow_m3_hr=flow,
+            diameter_m=diameter,
+            bed_depth_m=1.0,
+            n_vessels=1
+        )
+
+        assert is_valid is True
+        assert len(warnings) == 0
+
+    def test_velocity_at_minimum_boundary(self):
+        """Velocity exactly at 5 m/hr should pass with no warnings."""
+        diameter = 2.0
+        area = math.pi * (diameter / 2) ** 2
+        target_velocity = 5.0  # m/hr - AWWA minimum
+        flow = target_velocity * area
+
+        is_valid, warnings = validate_vessel_hydraulics(
+            flow_m3_hr=flow,
+            diameter_m=diameter,
+            bed_depth_m=1.0,
+            n_vessels=1
+        )
+
+        assert is_valid is True
+        assert len(warnings) == 0
+
+    def test_velocity_below_minimum_warning(self):
+        """Velocity < 5 m/hr should generate warning but remain valid."""
+        diameter = 2.0
+        area = math.pi * (diameter / 2) ** 2
+        target_velocity = 4.0  # m/hr - below recommended minimum
+        flow = target_velocity * area
+
+        is_valid, warnings = validate_vessel_hydraulics(
+            flow_m3_hr=flow,
+            diameter_m=diameter,
+            bed_depth_m=1.0,
+            n_vessels=1
+        )
+
+        # Low velocity is a warning, not a blocking violation
+        assert is_valid is True
+        assert len(warnings) == 1
+        assert "below recommended minimum" in warnings[0].lower()
+
+    def test_velocity_above_recommended_warning(self):
+        """Velocity 25-40 m/hr should generate warning but remain valid."""
+        diameter = 2.0
+        area = math.pi * (diameter / 2) ** 2
+        target_velocity = 30.0  # m/hr - above recommended but within AWWA
+        flow = target_velocity * area
+
+        is_valid, warnings = validate_vessel_hydraulics(
+            flow_m3_hr=flow,
+            diameter_m=diameter,
+            bed_depth_m=1.0,
+            n_vessels=1
+        )
+
+        # Above recommended but within AWWA is a warning
+        assert is_valid is True
+        assert len(warnings) == 1
+        assert "exceeds recommended maximum" in warnings[0].lower()
+        assert "25" in warnings[0]
+
+    def test_velocity_at_awwa_maximum_boundary(self):
+        """Velocity exactly at 40 m/hr should pass with warning."""
+        diameter = 2.0
+        area = math.pi * (diameter / 2) ** 2
+        target_velocity = 40.0  # m/hr - AWWA maximum
+        flow = target_velocity * area
+
+        is_valid, warnings = validate_vessel_hydraulics(
+            flow_m3_hr=flow,
+            diameter_m=diameter,
+            bed_depth_m=1.0,
+            n_vessels=1
+        )
+
+        # At exactly 40 m/hr - passes AWWA but above recommended
+        assert is_valid is True
+        assert len(warnings) == 1
+        assert "exceeds recommended" in warnings[0].lower()
+
+    def test_velocity_exceeds_awwa_maximum_blocking(self):
+        """Velocity > 40 m/hr should be invalid (AWWA blocking violation)."""
+        diameter = 2.0
+        area = math.pi * (diameter / 2) ** 2
+        target_velocity = 45.0  # m/hr - exceeds AWWA B100
+        flow = target_velocity * area
+
+        is_valid, warnings = validate_vessel_hydraulics(
+            flow_m3_hr=flow,
+            diameter_m=diameter,
+            bed_depth_m=1.0,
+            n_vessels=1
+        )
+
+        # Exceeds AWWA maximum - blocking violation
+        assert is_valid is False
+        assert len(warnings) == 1
+        assert "exceeds awwa b100" in warnings[0].lower()
+        assert "40" in warnings[0]
+
+    def test_bed_depth_adequate(self):
+        """Bed depth >= 0.75 m should pass."""
+        diameter = 2.0
+        area = math.pi * (diameter / 2) ** 2
+        flow = 15.0 * area  # 15 m/hr velocity
+
+        is_valid, warnings = validate_vessel_hydraulics(
+            flow_m3_hr=flow,
+            diameter_m=diameter,
+            bed_depth_m=1.0,  # Adequate depth
+            n_vessels=1
+        )
+
+        assert is_valid is True
+        assert len(warnings) == 0
+
+    def test_bed_depth_at_minimum_boundary(self):
+        """Bed depth exactly at 0.75 m should pass."""
+        diameter = 2.0
+        area = math.pi * (diameter / 2) ** 2
+        flow = 15.0 * area
+
+        is_valid, warnings = validate_vessel_hydraulics(
+            flow_m3_hr=flow,
+            diameter_m=diameter,
+            bed_depth_m=0.75,  # Minimum allowed
+            n_vessels=1
+        )
+
+        assert is_valid is True
+        assert len(warnings) == 0
+
+    def test_bed_depth_below_minimum_blocking(self):
+        """Bed depth < 0.75 m should be invalid (blocking violation)."""
+        diameter = 2.0
+        area = math.pi * (diameter / 2) ** 2
+        flow = 15.0 * area
+
+        is_valid, warnings = validate_vessel_hydraulics(
+            flow_m3_hr=flow,
+            diameter_m=diameter,
+            bed_depth_m=0.5,  # Below minimum
+            n_vessels=1
+        )
+
+        # Below minimum bed depth is blocking
+        assert is_valid is False
+        assert len(warnings) == 1
+        assert "below minimum" in warnings[0].lower()
+        assert "0.75" in warnings[0]
+
+    def test_diameter_within_shipping_limit(self):
+        """Diameter <= 2.4 m should pass."""
+        diameter = 2.0
+        area = math.pi * (diameter / 2) ** 2
+        flow = 15.0 * area
+
+        is_valid, warnings = validate_vessel_hydraulics(
+            flow_m3_hr=flow,
+            diameter_m=diameter,
+            bed_depth_m=1.0,
+            n_vessels=1
+        )
+
+        assert is_valid is True
+        assert len(warnings) == 0
+
+    def test_diameter_at_shipping_limit(self):
+        """Diameter exactly at 2.4 m should pass."""
+        diameter = 2.4
+        area = math.pi * (diameter / 2) ** 2
+        flow = 15.0 * area
+
+        is_valid, warnings = validate_vessel_hydraulics(
+            flow_m3_hr=flow,
+            diameter_m=diameter,
+            bed_depth_m=1.0,
+            n_vessels=1
+        )
+
+        assert is_valid is True
+        assert len(warnings) == 0
+
+    def test_diameter_exceeds_shipping_limit_warning(self):
+        """Diameter > 2.4 m should generate warning but remain valid."""
+        diameter = 3.0  # Exceeds shipping constraint
+        area = math.pi * (diameter / 2) ** 2
+        flow = 15.0 * area  # Keep velocity in optimal range
+
+        is_valid, warnings = validate_vessel_hydraulics(
+            flow_m3_hr=flow,
+            diameter_m=diameter,
+            bed_depth_m=1.0,
+            n_vessels=1
+        )
+
+        # Shipping constraint is warning, not blocking
+        assert is_valid is True
+        assert len(warnings) == 1
+        assert "shipping constraint" in warnings[0].lower()
+        assert "2.4" in warnings[0]
+
+    def test_flow_split_across_vessels(self):
+        """Flow should be divided by n_vessels for velocity calculation."""
+        diameter = 2.0
+        area = math.pi * (diameter / 2) ** 2
+
+        # Total flow that would be 60 m/hr for single vessel
+        total_flow = 60.0 * area
+
+        # Single vessel - exceeds AWWA (invalid)
+        is_valid_1, _ = validate_vessel_hydraulics(
+            flow_m3_hr=total_flow,
+            diameter_m=diameter,
+            bed_depth_m=1.0,
+            n_vessels=1
+        )
+        assert is_valid_1 is False  # 60 m/hr exceeds 40 m/hr
+
+        # Two vessels - 30 m/hr each (valid, but above recommended)
+        is_valid_2, warnings_2 = validate_vessel_hydraulics(
+            flow_m3_hr=total_flow,
+            diameter_m=diameter,
+            bed_depth_m=1.0,
+            n_vessels=2
+        )
+        assert is_valid_2 is True  # 30 m/hr is within AWWA
+        assert len(warnings_2) == 1
+        assert "exceeds recommended" in warnings_2[0].lower()
+
+        # Four vessels - 15 m/hr each (optimal)
+        is_valid_4, warnings_4 = validate_vessel_hydraulics(
+            flow_m3_hr=total_flow,
+            diameter_m=diameter,
+            bed_depth_m=1.0,
+            n_vessels=4
+        )
+        assert is_valid_4 is True
+        assert len(warnings_4) == 0
+
+    def test_n_vessels_default(self):
+        """Default n_vessels=1 should work correctly."""
+        diameter = 2.0
+        area = math.pi * (diameter / 2) ** 2
+        flow = 15.0 * area
+
+        # Without specifying n_vessels
+        is_valid, warnings = validate_vessel_hydraulics(
+            flow_m3_hr=flow,
+            diameter_m=diameter,
+            bed_depth_m=1.0
+        )
+
+        assert is_valid is True
+        assert len(warnings) == 0
+
+    def test_multiple_warnings_combination(self):
+        """Configuration with multiple issues should return all warnings."""
+        diameter = 3.0  # Exceeds shipping constraint
+        area = math.pi * (diameter / 2) ** 2
+        target_velocity = 30.0  # Exceeds recommended
+        flow = target_velocity * area
+
+        is_valid, warnings = validate_vessel_hydraulics(
+            flow_m3_hr=flow,
+            diameter_m=diameter,
+            bed_depth_m=1.0,  # Adequate
+            n_vessels=1
+        )
+
+        # Both velocity and diameter warnings
+        assert is_valid is True
+        assert len(warnings) == 2
+        assert any("shipping" in w.lower() for w in warnings)
+        assert any("recommended" in w.lower() for w in warnings)
+
+    def test_blocking_with_additional_warnings(self):
+        """Blocking violation should still include other warnings."""
+        diameter = 3.0  # Exceeds shipping constraint
+        area = math.pi * (diameter / 2) ** 2
+        target_velocity = 50.0  # Exceeds AWWA (blocking)
+        flow = target_velocity * area
+
+        is_valid, warnings = validate_vessel_hydraulics(
+            flow_m3_hr=flow,
+            diameter_m=diameter,
+            bed_depth_m=0.5,  # Below minimum (blocking)
+            n_vessels=1
+        )
+
+        # Multiple blocking + warning issues
+        assert is_valid is False
+        assert len(warnings) >= 2
+
+    def test_typical_industrial_configuration(self):
+        """Typical industrial configuration should pass cleanly."""
+        # 100 m³/hr through 2.0 m diameter vessel
+        # Velocity = 100 / (π × 1²) = 31.83 m/hr
+        is_valid, warnings = validate_vessel_hydraulics(
+            flow_m3_hr=100.0,
+            diameter_m=2.0,
+            bed_depth_m=1.5,
+            n_vessels=1
+        )
+
+        # High but acceptable velocity
+        assert is_valid is True
+        # Velocity ~32 m/hr exceeds 25 recommended
+        assert len(warnings) == 1
+        assert "exceeds recommended" in warnings[0].lower()
+
+    def test_return_tuple_structure(self):
+        """Function should return (bool, list) tuple."""
+        result = validate_vessel_hydraulics(
+            flow_m3_hr=50.0,
+            diameter_m=2.0,
+            bed_depth_m=1.0,
+            n_vessels=1
+        )
+
+        assert isinstance(result, tuple)
+        assert len(result) == 2
+        assert isinstance(result[0], bool)
+        assert isinstance(result[1], list)
+
+    def test_warnings_list_contains_strings(self):
+        """Warnings list should contain string messages."""
+        _, warnings = validate_vessel_hydraulics(
+            flow_m3_hr=500.0,  # Very high flow - will generate warnings
+            diameter_m=2.0,
+            bed_depth_m=0.5,  # Low bed depth
+            n_vessels=1
+        )
+
+        for warning in warnings:
+            assert isinstance(warning, str)
+            assert len(warning) > 0
+
+    def test_velocity_formula_correctness(self):
+        """Verify velocity = flow / (n_vessels × π × (d/2)²)."""
+        # Known values
+        flow = 100.0  # m³/hr
+        diameter = 2.0  # m
+        n_vessels = 2
+
+        # Expected velocity: 100 / 2 / 3.14159 ≈ 15.92 m/hr
+        # This is in optimal range (10-25), so no warnings
+        is_valid, warnings = validate_vessel_hydraulics(
+            flow_m3_hr=flow,
+            diameter_m=diameter,
+            bed_depth_m=1.0,
+            n_vessels=n_vessels
+        )
+
+        assert is_valid is True
+        assert len(warnings) == 0  # ~16 m/hr is optimal

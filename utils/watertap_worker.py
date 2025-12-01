@@ -285,9 +285,21 @@ def run_watertap_flowsheet(input_data):
         
         total_opex = regenerant_cost + resin_replacement_cost + energy_cost
         
-        # LCOW
-        flow_m3_year = flow_rate_m3h * 8760 * 0.9
-        crf = 0.1
+        # LCOW - use schema parameters if provided, else defaults
+        # CRF formula: r(1+r)^n / ((1+r)^n - 1)
+        pricing = input_data.get('pricing', {})
+        discount_rate = pricing.get('discount_rate', 0.08)
+        plant_lifetime = pricing.get('plant_lifetime_years', 20)
+        availability = pricing.get('availability', 0.9)
+
+        if discount_rate <= 0:
+            crf = 1.0 / plant_lifetime if plant_lifetime > 0 else 0.1
+        else:
+            crf = discount_rate * (1 + discount_rate) ** plant_lifetime / (
+                (1 + discount_rate) ** plant_lifetime - 1
+            )
+
+        flow_m3_year = flow_rate_m3h * 8760 * availability
         lcow = (total_capital * crf + total_opex) / flow_m3_year
         
         return {
@@ -306,6 +318,9 @@ def run_watertap_flowsheet(input_data):
                 'resin_replacement_cost_usd_year': resin_replacement_cost,
                 'energy_cost_usd_year': energy_cost,
                 'lcow_usd_m3': lcow,
+                'crf': crf,
+                'discount_rate': discount_rate,
+                'plant_lifetime_years': plant_lifetime,
                 'sec_kwh_m3': 0.05,
                 'unit_costs': {
                     'vessels_usd': vessel_cost,

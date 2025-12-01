@@ -225,9 +225,41 @@ Add to `claude_desktop_config.json`:
 }
 ```
 
-## Recent Improvements (September 2025)
+## Known Limitations
 
-### SAC Leakage Model Overhaul
+### WAC H-form PHREEQC Layer
+
+**Important**: For WAC H-form simulations, the **empirical overlay values are authoritative**, not raw PHREEQC outputs.
+
+The WAC H-form PHREEQC model uses a reduced pKa (log_k = 2.5 instead of true pKa 4.8) for numerical stability. This causes non-physical breakthrough behavior in the PHREEQC layer. The empirical overlay (Henderson-Hasselbalch capacity model) corrects for this and should be used for:
+- Breakthrough BV predictions
+- Leakage estimates (mg/L)
+- Operating capacity (eq/L)
+
+See `docs/WAC_H_SIMULATION_ISSUES.md` for detailed technical documentation.
+
+| Metric | Source | Use For |
+|--------|--------|---------|
+| Breakthrough BV | Overlay (ktf-adjusted) | Sizing, service life |
+| Leakage mg/L | Overlay (H-H model) | Water quality prediction |
+| Capacity eq/L | Overlay (4.0 with ktf=0.85) | Regenerant dosing |
+| pH trends | PHREEQC (qualitative) | Front shape only |
+
+---
+
+## Recent Improvements (December 2025)
+
+### Production Readiness Release
+
+**Comprehensive Codex-reviewed production readiness update:**
+
+- ✅ **SAC Dual-Domain Transport**: Integrated mass transfer-limited PHREEQC templates
+- ✅ **Unified Economics Module**: New `IXEconomicsCalculator` class with EPA-WBS correlations
+- ✅ **Hydraulic Validation**: AWWA B100 compliance checking via `validate_vessel_hydraulics()`
+- ✅ **WAC H-form Initialization**: pH 0.5 conditioning with explicit HX loading (no Na seeding)
+- ✅ **Test Coverage**: 173 tests passing (31 economics, 51 hydraulics)
+
+### September 2025 - SAC Leakage Model Overhaul
 Replaced fundamentally flawed dose-based leakage model with **USEPA Gaines-Thomas equilibrium solver**:
 
 **Before (Wrong)**:

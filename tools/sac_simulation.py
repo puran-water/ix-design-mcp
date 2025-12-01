@@ -59,6 +59,23 @@ from .sac_configuration import (
 from .core_config import CONFIG
 # Base class imported locally where needed to avoid scoping issues
 
+# Import empirical leakage overlay for two-layer architecture
+from .empirical_leakage_overlay import (
+    EmpiricalLeakageOverlay,
+    CalibrationLoader,
+    CalibrationParameters
+)
+
+# Import SAC dual-domain templates
+try:
+    from watertap_ix_transport.transport_core.sac_templates import (
+        create_sac_dual_domain_input,
+        create_sac_single_domain_input
+    )
+    SAC_TEMPLATES_AVAILABLE = True
+except ImportError:
+    SAC_TEMPLATES_AVAILABLE = False
+
 logger = logging.getLogger(__name__)
 
 # Log enhanced generator availability
@@ -66,6 +83,12 @@ if ENHANCED_GENERATOR_AVAILABLE:
     logger.info("Enhanced PHREEQC generator loaded successfully")
 else:
     logger.warning("Enhanced PHREEQC generator not available")
+
+# Log SAC templates availability
+if SAC_TEMPLATES_AVAILABLE:
+    logger.info(f"SAC templates loaded - dual-domain: {CONFIG.SAC_USE_DUAL_DOMAIN}")
+else:
+    logger.warning("SAC templates not available - using inline PHREEQC generation")
 
 
 class SACPerformanceMetrics(BaseModel):
@@ -568,9 +591,77 @@ class _IXDirectPhreeqcSimulation:
                 )
         else:
             exchange_species_block = "# Exchange species loaded from database"
-        
-        # Build PHREEQC input with all MCAS ions
-        phreeqc_input = f"""DATABASE {db_path}
+
+        # Use SAC dual-domain templates if available and enabled
+        if SAC_TEMPLATES_AVAILABLE and CONFIG.SAC_USE_DUAL_DOMAIN:
+            logger.info("Using SAC dual-domain template for PHREEQC input")
+
+            # Build water composition dict for template
+            water_composition = {
+                'ca_mg_l': ca_mg_L,
+                'mg_mg_l': mg_mg_L,
+                'na_mg_l': na_mg_L,
+                'k_mg_l': k_mg_L,
+                'cl_mg_l': cl_mg_L,
+                'hco3_mg_l': hco3_mg_L,
+                'so4_mg_l': so4_mg_L,
+                'pH': water.pH,
+                'temperature_celsius': water.temperature_celsius
+            }
+
+            # Build vessel config dict for template
+            template_vessel_config = {
+                'bed_depth_m': bed_depth_m,
+                'bed_volume_L': bed_volume_L,
+                'diameter_m': diameter_m,
+                'porosity': porosity
+            }
+
+            phreeqc_input = create_sac_dual_domain_input(
+                water_composition=water_composition,
+                vessel_config=template_vessel_config,
+                cells=cells,
+                max_bv=max_bv,
+                database_path=str(db_path),
+                capacity_eq_L=resin_capacity_eq_L
+            )
+        elif SAC_TEMPLATES_AVAILABLE:
+            # Use single-domain template (legacy mode)
+            logger.info("Using SAC single-domain template for PHREEQC input (legacy mode)")
+
+            water_composition = {
+                'ca_mg_l': ca_mg_L,
+                'mg_mg_l': mg_mg_L,
+                'na_mg_l': na_mg_L,
+                'k_mg_l': k_mg_L,
+                'cl_mg_l': cl_mg_L,
+                'hco3_mg_l': hco3_mg_L,
+                'so4_mg_l': so4_mg_L,
+                'pH': water.pH,
+                'temperature_celsius': water.temperature_celsius
+            }
+
+            template_vessel_config = {
+                'bed_depth_m': bed_depth_m,
+                'bed_volume_L': bed_volume_L,
+                'diameter_m': diameter_m,
+                'porosity': porosity
+            }
+
+            phreeqc_input = create_sac_single_domain_input(
+                water_composition=water_composition,
+                vessel_config=template_vessel_config,
+                cells=cells,
+                max_bv=max_bv,
+                database_path=str(db_path),
+                capacity_eq_L=resin_capacity_eq_L
+            )
+        else:
+            # Fall back to inline PHREEQC generation
+            logger.info("Using inline PHREEQC generation (templates not available)")
+
+            # Build PHREEQC input with all MCAS ions
+            phreeqc_input = f"""DATABASE {db_path}
 TITLE SAC Simulation - Target Hardness Breakthrough
 
 PHASES
@@ -613,7 +704,7 @@ EXCHANGE 1-{cells}
 # Transport
 TRANSPORT
     -cells    {cells}
-    -shifts   {int(max_bv * bed_volume_L / water_per_cell_kg)}
+    -shifts   {int(np.ceil(max_bv))}
     -lengths  {cell_length_m}
     -dispersivities {cells}*0.002
     -porosities {porosity}
@@ -634,8 +725,8 @@ USER_PUNCH 1
     -headings Step BV Ca_mg_L Mg_mg_L Na_mg_L K_mg_L Hardness_CaCO3
     -start
     10 PUNCH STEP_NO
-    # BV calculation: volume passed / total bed volume
-    20 BV = STEP_NO * {water_per_cell_kg} / {bed_volume_L}
+    # BV calculation: each shift represents one bed volume (consistent with TRANSPORT -shifts)
+    20 BV = STEP_NO
     30 PUNCH BV
     # Convert mol/kg to mg/L
     40 ca_mg = TOT("Ca") * 40.078 * 1000
@@ -789,22 +880,22 @@ END
             na_mol_L = 0
             cl_mol_L = 0
         
-        # Calculate shifts for each phase
-        service_shifts = int((service_bv + 5) * bed_volume_L / water_per_cell_kg)  # +5 BV buffer
+        # Calculate shifts for each phase (each shift = one bed volume)
+        service_shifts = int(np.ceil(service_bv + 5))  # +5 BV buffer
         
         # Regeneration shifts
         if regen_config.mode == "auto":
-            regen_shifts = int(regen_config.max_regenerant_bv * bed_volume_L / water_per_cell_kg)
+            regen_shifts = int(np.ceil(regen_config.max_regenerant_bv))
         else:
-            regen_shifts = int(regen_config.fixed_volume_bv * bed_volume_L / water_per_cell_kg)
+            regen_shifts = int(np.ceil(regen_config.fixed_volume_bv))
         
         # Backwash calculations
-        backwash_shifts = int(regen_config.backwash_bv * bed_volume_L / water_per_cell_kg)
+        backwash_shifts = int(np.ceil(regen_config.backwash_bv))
         backwash_timestep = water_per_cell_kg / (regen_config.backwash_flow_rate_bv_hr * bed_volume_L / 3600)
         
         # Rinse calculations  
-        slow_rinse_shifts = int(regen_config.slow_rinse_bv * bed_volume_L / water_per_cell_kg)
-        fast_rinse_shifts = int(regen_config.fast_rinse_bv * bed_volume_L / water_per_cell_kg)
+        slow_rinse_shifts = int(np.ceil(regen_config.slow_rinse_bv))
+        fast_rinse_shifts = int(np.ceil(regen_config.fast_rinse_bv))
         
         # Flow timesteps
         service_timestep = water_per_cell_kg / (water.flow_m3_hr * 1000 / 3600)
@@ -844,8 +935,8 @@ USER_PUNCH 1
     80 PUNCH SIM_NO
     90 PUNCH STEP_NO
     
-    # Calculate BV based on phase
-    100 bv = STEP_NO * {water_per_cell_kg} / {bed_volume_L}
+    # Calculate BV based on phase (each shift = one bed volume)
+    100 bv = STEP_NO
     110 PUNCH bv
     
     # Common calculations
@@ -1052,8 +1143,70 @@ END
             max_bv=max_bv,  # Use calculated max_bv instead of hardcoded 100
             cells=CONFIG.DEFAULT_CELLS
         )
-        
-        # Find service breakthrough
+
+        # === APPLY EMPIRICAL LEAKAGE OVERLAY (Two-Layer Architecture) ===
+        # Layer 1: PHREEQC provides thermodynamic equilibrium and competition effects
+        # Layer 2: Empirical overlay adds non-equilibrium leakage (incomplete regen, kinetics, etc.)
+        try:
+            # Load calibration parameters for SAC
+            cal_loader = CalibrationLoader()
+            cal_params = cal_loader.load('default', 'SAC')
+
+            # Update calibration from regeneration design parameters if available
+            if regen_config.regenerant_dose_g_per_L:
+                cal_params.regenerant_dose_g_per_l = regen_config.regenerant_dose_g_per_L
+            if hasattr(regen_config, 'flow_direction') and regen_config.flow_direction:
+                cal_params.regen_flow_direction = regen_config.flow_direction
+            if regen_config.slow_rinse_bv:
+                cal_params.slow_rinse_volume_bv = regen_config.slow_rinse_bv
+            if regen_config.fast_rinse_bv:
+                cal_params.fast_rinse_volume_bv = regen_config.fast_rinse_bv
+
+            # Create overlay and derive regen efficiency from design parameters
+            overlay = EmpiricalLeakageOverlay(cal_params)
+            overlay.update_regen_efficiency_from_design(resin_type='SAC')
+
+            # Calculate feed properties
+            feed_hardness_caco3 = water.ca_mg_l * 2.5 + water.mg_mg_l * 4.1
+            feed_tds = (water.ca_mg_l + water.mg_mg_l + water.na_mg_l +
+                        water.cl_mg_l + water.so4_mg_l + water.hco3_mg_l)
+
+            # Get PHREEQC's equilibrium leakage (early service values)
+            # ADDITIVE approach: PHREEQC competition + empirical non-equilibrium
+            phreeqc_early_leakage = float(np.min(curves['Hardness'][:max(5, len(curves['Hardness'])//10)]))
+
+            # Calculate empirical leakage (adds to PHREEQC baseline)
+            overlay_result = overlay.calculate_empirical_leakage(
+                feed_hardness_mg_l_caco3=feed_hardness_caco3,
+                feed_tds_mg_l=feed_tds,
+                temperature_c=getattr(water, 'temperature_c', 25.0),
+                phreeqc_leakage_mg_l=phreeqc_early_leakage,  # ADDITIVE approach
+                resin_type='SAC'
+            )
+
+            # Apply overlay: use pointwise maximum to enforce empirical floor
+            # The PHREEQC curve shows the shape (competition effects), overlay enforces minimum
+            empirical_floor = overlay_result.hardness_leakage_mg_l_caco3
+            original_min = float(np.min(curves['Hardness']))
+
+            # Apply pointwise max to enforce floor without inflating breakthrough tails
+            original_hardness = curves['Hardness'].copy()
+            curves['Hardness'] = np.maximum(curves['Hardness'], empirical_floor)
+            points_modified = np.sum(original_hardness < empirical_floor)
+
+            if points_modified > 0:
+                logger.info(f"SAC Empirical Overlay Applied (pointwise max):")
+                logger.info(f"  PHREEQC equilibrium leakage: {phreeqc_early_leakage:.2f} mg/L")
+                logger.info(f"  Empirical floor: {empirical_floor:.2f} mg/L")
+                logger.info(f"  Points modified: {points_modified}/{len(curves['Hardness'])}")
+                logger.info(f"  Regen efficiency (from design): {cal_params.regen_eff_eta*100:.1f}%")
+            else:
+                logger.info(f"SAC Empirical Overlay: PHREEQC leakage ({original_min:.2f}) >= empirical floor ({empirical_floor:.2f})")
+
+        except Exception as e:
+            logger.warning(f"Empirical overlay failed, using raw PHREEQC results: {e}")
+
+        # Find service breakthrough (now with empirical leakage floor applied)
         breakthrough_bv = self.find_target_breakthrough(
             bv_array,
             curves['Hardness'],

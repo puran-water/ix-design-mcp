@@ -15,8 +15,8 @@ import logging
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from tools.core_config import CONFIG
-# WAC now uses SURFACE complexation model - see wac_surface_builder.py
-# from tools.wac_enhanced_species import generate_wac_exchange_species  # REMOVED
+# WAC uses dual-domain EXCHANGE model - see watertap_ix_transport/transport_core/wac_templates.py
+# SURFACE model was deprecated (Codex 019abbed) due to numerical instability at industrial scale
 
 logger = logging.getLogger(__name__)
 
@@ -80,12 +80,12 @@ class EnhancedPHREEQCGenerator:
         Returns:
             Complete EXCHANGE_SPECIES block as string
         """
-        # For WAC resins, use SURFACE complexation model instead
+        # For WAC resins, use dual-domain EXCHANGE model from wac_templates
         if resin_type.startswith("WAC") and use_wac_enhanced:
-            # WAC now uses SURFACE complexation - see wac_surface_builder.py
+            # WAC uses specialized templates - see wac_templates.py
             raise NotImplementedError(
-                "WAC resins now use SURFACE complexation model. "
-                "Use tools.wac_surface_builder instead of EXCHANGE_SPECIES."
+                "WAC resins use dual-domain EXCHANGE templates. "
+                "Use watertap_ix_transport.transport_core.wac_templates instead."
             )
 
         # Get resin data from database
