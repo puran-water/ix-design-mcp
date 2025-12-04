@@ -505,23 +505,45 @@ class JobManager:
                 "job_id": job_id
             }
 
-    async def list_jobs(self, status_filter: Optional[str] = None, limit: int = 20) -> dict:
+    async def list_jobs(
+        self,
+        status_filter: Optional[str] = None,
+        limit: int = 20,
+        offset: int = 0
+    ) -> dict:
         """
-        List all jobs with optional status filter.
+        List all jobs with optional status filter and pagination.
 
         Args:
             status_filter: Filter by status ("running", "completed", "failed", or None for all)
-            limit: Maximum number of jobs to return
+            limit: Maximum number of jobs to return per page
+            offset: Number of jobs to skip for pagination
 
         Returns:
-            Dict with jobs list
+            Dict with jobs list and pagination metadata
         """
-        jobs_list = []
-
-        for job_id, job in sorted(self.jobs.items(), key=lambda x: x[1].get("started_at", 0), reverse=True):
+        # First, filter all jobs by status
+        filtered_jobs = []
+        for job_id, job in sorted(
+            self.jobs.items(),
+            key=lambda x: x[1].get("started_at", 0),
+            reverse=True
+        ):
             if status_filter and job["status"] != status_filter:
                 continue
+            filtered_jobs.append((job_id, job))
 
+        # Calculate pagination
+        total_filtered = len(filtered_jobs)
+        has_more = (offset + limit) < total_filtered
+        next_offset = offset + limit if has_more else None
+
+        # Apply pagination (offset and limit)
+        paginated_jobs = filtered_jobs[offset:offset + limit]
+
+        # Build response list
+        jobs_list = []
+        for job_id, job in paginated_jobs:
             jobs_list.append({
                 "id": job_id,
                 "status": job["status"],
@@ -530,12 +552,16 @@ class JobManager:
                 "elapsed_time_seconds": round(time.time() - job["started_at"], 1) if job["status"] == "running" else None
             })
 
-            if len(jobs_list) >= limit:
-                break
-
         return {
             "jobs": jobs_list,
-            "total": len(jobs_list),
+            "pagination": {
+                "total": total_filtered,
+                "count": len(jobs_list),
+                "offset": offset,
+                "limit": limit,
+                "has_more": has_more,
+                "next_offset": next_offset
+            },
             "filter": status_filter,
             "running_jobs": sum(1 for j in self.jobs.values() if j["status"] == "running"),
             "max_concurrent": self.max_concurrent_jobs

@@ -1,0 +1,65 @@
+[run]
+# Source directories to measure
+source =
+    tools
+    utils
+    watertap_ix_transport
+
+# Files and directories to exclude from coverage
+omit =
+    tests/*
+    */__pycache__/*
+    */debug_*
+    */notebook_runner.py
+    setup.py
+    server.py
+
+# Measure branch coverage
+branch = True
+
+# Parallel execution support
+parallel = True
+
+[report]
+# Exclude lines from coverage reporting
+exclude_lines =
+    # Standard exclusions
+    pragma: no cover
+
+    # Don't complain about missing debug-only code
+    def __repr__
+    if self\.debug
+
+    # Don't complain if tests don't hit defensive assertions
+    raise AssertionError
+    raise NotImplementedError
+
+    # Don't complain if non-runnable code isn't run
+    if 0:
+    if __name__ == .__main__.:
+
+    # Don't complain about type checking blocks
+    if TYPE_CHECKING:
+
+    # Don't complain about abstract methods
+    @abstractmethod
+
+# Minimum coverage threshold (fail if below)
+fail_under = 60
+
+# Show missing line numbers
+show_missing = True
+
+# Precision for percentages
+precision = 1
+
+[html]
+# Output directory for HTML reports
+directory = htmlcov
+
+# Title for HTML report
+title = IX Design MCP Coverage Report
+
+[xml]
+# Output file for XML report (for CI integration)
+output = coverage.xml

@@ -1,0 +1,60 @@
+# Pre-commit hooks for ix-design-mcp
+# Install: pre-commit install
+# Run manually: pre-commit run --all-files
+
+repos:
+  # General file checks
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.5.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+      - id: check-json
+      - id: check-added-large-files
+        args: ['--maxkb=1000']
+      - id: check-merge-conflict
+      - id: debug-statements
+      - id: mixed-line-ending
+        args: ['--fix=lf']
+
+  # Python code formatting with Black
+  - repo: https://github.com/psf/black
+    rev: 23.12.1
+    hooks:
+      - id: black
+        language_version: python3
+        args: ['--config', 'pyproject.toml']
+
+  # Import sorting with isort
+  - repo: https://github.com/pycqa/isort
+    rev: 5.13.2
+    hooks:
+      - id: isort
+        args: ['--settings-path', 'pyproject.toml']
+
+  # Flake8 linting
+  - repo: https://github.com/pycqa/flake8
+    rev: 7.0.0
+    hooks:
+      - id: flake8
+        additional_dependencies:
+          - flake8-pyproject  # To read config from pyproject.toml
+        args: ['--config', 'pyproject.toml']
+
+  # Type checking with mypy (optional - can be slow)
+  # Uncomment to enable mypy in pre-commit
+  # - repo: https://github.com/pre-commit/mirrors-mypy
+  #   rev: v1.8.0
+  #   hooks:
+  #     - id: mypy
+  #       args: ['--config-file', 'pyproject.toml']
+  #       additional_dependencies:
+  #         - pydantic>=2.0.0
+  #         - types-requests
+
+# Default stages for hooks
+default_stages: [commit, push]
+
+# Minimum pre-commit version
+minimum_pre_commit_version: '3.0.0'

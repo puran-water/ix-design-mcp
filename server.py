@@ -62,6 +62,15 @@ from concurrent.futures import ThreadPoolExecutor
 from fastmcp import FastMCP, Context
 from pydantic import Field, BaseModel
 
+# Import MCP types for response formatting
+from tools.mcp_types import (
+    ResponseFormat,
+    PaginationInfo,
+    format_as_markdown,
+    format_vessel_config_markdown,
+    format_economics_markdown,
+)
+
 # Import our utilities
 # from tools.ix_configuration import optimize_ix_configuration  # COMMENTED OUT
 # from tools.ix_simulation import simulate_ix_system, simulate_ix_system_graybox  # COMMENTED OUT
@@ -133,7 +142,8 @@ except Exception:
 HYBRID_EXECUTOR = ThreadPoolExecutor(max_workers=HYBRID_EXECUTOR_WORKERS, thread_name_prefix="hybrid")
 
 # Create FastMCP instance with configuration
-mcp = FastMCP("IX Design Server")
+# Server name follows MCP best practice: {service}_mcp format
+mcp = FastMCP("ix_design_mcp")
 
 
 def get_project_root() -> Path:
@@ -442,19 +452,38 @@ def ensure_simulation_input_complete(input_data: Dict[str, Any], resin_type: str
 #     # Convert result to dict using model_dump instead of deprecated dict()
 #     return result.model_dump()
 
+# Extended input model with response_format support
+class SACConfigurationInputMCP(BaseModel):
+    """SAC configuration input with MCP response format support."""
+    water_analysis: Dict[str, Any] = Field(description="Water composition parameters")
+    target_hardness_mg_l_caco3: float = Field(default=5.0, description="Target effluent hardness")
+    response_format: ResponseFormat = Field(
+        default=ResponseFormat.JSON,
+        description="Output format: 'json' for machine-readable or 'markdown' for human-readable"
+    )
+
+
 # Add SAC-only configuration tool
 @mcp.tool(
+    name="ix_configure_sac",
+    annotations={
+        "title": "Configure SAC Vessel",
+        "readOnlyHint": True,
+        "destructiveHint": False,
+        "idempotentHint": True,
+        "openWorldHint": False
+    },
     description="""Configure SAC ion exchange vessel for RO pretreatment.
-    
+
     Sizes a single SAC vessel based on:
     - Service flow rate: 16 BV/hr (bed volumes per hour)
     - Linear velocity: 25 m/hr maximum
     - Minimum bed depth: 0.75 m
     - N+1 redundancy (1 service + 1 standby vessel)
     - Shipping container constraint: 2.4 m maximum diameter
-    
+
     Input parameter: configuration_input (object with water_analysis and target_hardness_mg_l_caco3)
-    
+
     Example:
     {
       "water_analysis": {
@@ -466,23 +495,25 @@ def ensure_simulation_input_complete(input_data: Dict[str, Any], resin_type: str
         "pH": 7.8,
         "cl_mg_l": 1435
       },
-      "target_hardness_mg_l_caco3": 5.0
+      "target_hardness_mg_l_caco3": 5.0,
+      "response_format": "json"  // or "markdown" for human-readable output
     }
-    
+
     Required fields:
     - water_analysis.flow_m3_hr: Feed water flow rate (m3/hr)
     - water_analysis.ca_mg_l: Calcium (mg/L)
-    - water_analysis.mg_mg_l: Magnesium (mg/L)  
+    - water_analysis.mg_mg_l: Magnesium (mg/L)
     - water_analysis.na_mg_l: Sodium (mg/L)
     - water_analysis.hco3_mg_l: Bicarbonate (mg/L)
     - water_analysis.pH: Feed water pH
-    
+
     Optional fields:
     - water_analysis.cl_mg_l: Chloride (auto-balanced if not provided)
     - target_hardness_mg_l_caco3: Target effluent hardness (default 5.0)
+    - response_format: "json" (default) or "markdown"
     """
 )
-async def configure_sac_ix(configuration_input: Dict[str, Any]) -> Dict[str, Any]:
+async def configure_sac_ix(configuration_input: SACConfigurationInputMCP) -> Dict[str, Any]:
     """
     MCP tool handler for SAC vessel configuration.
 
@@ -493,48 +524,33 @@ async def configure_sac_ix(configuration_input: Dict[str, Any]) -> Dict[str, Any
     and rigorous hydraulics (Ergun pressure drop, Richardson-Zaki expansion).
 
     Args:
-        configuration_input: Dict with 'water_analysis' and 'target_hardness_mg_l_caco3'
+        configuration_input: Pydantic model with water_analysis, target_hardness, and response_format
 
     Returns:
         Dict with vessel configuration, hydraulic analysis, and design notes,
         or error dict with status, error message, and hints.
+        Output format depends on response_format parameter.
     """
     import time
     start_time = time.time()
     logger.info(f"configure_sac_ix started at {start_time}")
-    
+
     try:
-        import json
         import asyncio
-        from concurrent.futures import ThreadPoolExecutor
-        
-        # Handle both string and object inputs
-        if isinstance(configuration_input, str):
-            try:
-                configuration_input = json.loads(configuration_input)
-            except json.JSONDecodeError:
-                return {
-                    "error": "Invalid JSON input",
-                    "details": "Input must be a valid JSON object or dict"
-                }
-        
-        # Validate input size
-        input_size = len(json.dumps(configuration_input))
-        if input_size > MAX_REQUEST_SIZE:
-            return {
-                "error": "Request too large",
-                "details": f"Request size {input_size} bytes exceeds maximum {MAX_REQUEST_SIZE} bytes",
-                "hint": "Please reduce the size of your request"
-            }
-        
-        # Convert dict to pydantic model
-        sac_input = SACConfigurationInput(**configuration_input)
-        
+
+        # Extract response format before converting
+        response_format = configuration_input.response_format
+
+        # Build SAC input from MCP input
+        sac_input = SACConfigurationInput(
+            water_analysis=configuration_input.water_analysis,
+            target_hardness_mg_l_caco3=configuration_input.target_hardness_mg_l_caco3
+        )
+
         # Log before calling the function
         logger.info("About to call configure_sac_vessel")
-        
+
         # Run synchronous function in thread pool to avoid blocking event loop
-        # Add timeout to prevent infinite hanging
         loop = asyncio.get_event_loop()
         try:
             result = await asyncio.wait_for(
@@ -549,17 +565,25 @@ async def configure_sac_ix(configuration_input: Dict[str, Any]) -> Dict[str, Any
                 "details": "The configuration process took too long to complete",
                 "hint": "Try again or check server logs"
             }
-        
+
         # Convert result to dict
         output = result.model_dump()
-        
+
         elapsed = time.time() - start_time
         logger.info(f"configure_sac_ix completed in {elapsed:.2f} seconds")
+
+        # Format output based on response_format
+        if response_format == ResponseFormat.MARKDOWN:
+            # Return markdown-formatted output
+            vessel_md = format_vessel_config_markdown(output.get("vessel_configuration", {}))
+            full_md = format_as_markdown(output, title="SAC Vessel Configuration")
+            return {"content": f"{vessel_md}\n\n{full_md}", "format": "markdown"}
+
         return output
-        
+
     except Exception as e:
         logger.error(f"SAC configuration failed: {e}")
-        
+
         # Provide helpful error message with exact structure needed
         example_structure = {
             "configuration_input": {
@@ -574,7 +598,7 @@ async def configure_sac_ix(configuration_input: Dict[str, Any]) -> Dict[str, Any
                 "target_hardness_mg_l_caco3": 5.0
             }
         }
-        
+
         return {
             "error": "Configuration failed",
             "details": str(e),
@@ -582,18 +606,41 @@ async def configure_sac_ix(configuration_input: Dict[str, Any]) -> Dict[str, Any
             "example_structure": example_structure
         }
 
-# Add notebook-based analysis tool if available
+# Extended WAC input model with response_format support
+class WACConfigurationInputMCP(BaseModel):
+    """WAC configuration input with MCP response format support."""
+    water_analysis: Dict[str, Any] = Field(description="Water composition parameters")
+    resin_type: str = Field(default="WAC_Na", description="Resin type: WAC_Na or WAC_H")
+    target_hardness_mg_l_caco3: float = Field(default=5.0, description="Target effluent hardness")
+    target_alkalinity_mg_l_caco3: Optional[float] = Field(
+        default=5.0,
+        description="Target alkalinity for H-form WAC"
+    )
+    response_format: ResponseFormat = Field(
+        default=ResponseFormat.JSON,
+        description="Output format: 'json' for machine-readable or 'markdown' for human-readable"
+    )
+
+
 # Add WAC configuration tool
 @mcp.tool(
+    name="ix_configure_wac",
+    annotations={
+        "title": "Configure WAC Vessel",
+        "readOnlyHint": True,
+        "destructiveHint": False,
+        "idempotentHint": True,
+        "openWorldHint": False
+    },
     description="""Configure WAC ion exchange vessel for RO pretreatment.
-    
+
     Sizes WAC vessels based on:
     - Service flow rate: 16 BV/hr (bed volumes per hour)
     - Linear velocity: 25 m/hr maximum
     - Minimum bed depth: 0.75 m
     - N+1 redundancy (1 service + 1 standby vessel)
     - Bed expansion during regeneration (50% Na-form, 100% H-form)
-    
+
     Input parameters:
     {
       "water_analysis": {
@@ -607,16 +654,17 @@ async def configure_sac_ix(configuration_input: Dict[str, Any]) -> Dict[str, Any
       },
       "resin_type": "WAC_Na",  // or "WAC_H"
       "target_hardness_mg_l_caco3": 5.0,
-      "target_alkalinity_mg_l_caco3": 5.0  // For H-form
+      "target_alkalinity_mg_l_caco3": 5.0,  // For H-form
+      "response_format": "json"  // or "markdown"
     }
-    
+
     Key differences from SAC:
     - resin_type parameter selects WAC_Na or WAC_H
     - Alkalinity (hco3_mg_l) is critical for WAC performance
     - H-form removes alkalinity and generates CO2
     - Na-form uses two-step regeneration
     - Higher capacity but pH-dependent
-    
+
     Returns vessel configuration with:
     - Hydraulic sizing
     - Regeneration sequence
@@ -624,7 +672,7 @@ async def configure_sac_ix(configuration_input: Dict[str, Any]) -> Dict[str, Any
     - Design notes and warnings
     """
 )
-async def configure_wac_ix(configuration_input: Dict[str, Any]) -> Dict[str, Any]:
+async def configure_wac_ix(configuration_input: WACConfigurationInputMCP) -> Dict[str, Any]:
     """
     MCP tool handler for WAC vessel configuration.
 
@@ -634,11 +682,8 @@ async def configure_wac_ix(configuration_input: Dict[str, Any]) -> Dict[str, Any
     - WAC_Na: Two-step regeneration (acid + caustic), higher capacity
     - WAC_H: Single-step acid regeneration, generates CO2, removes alkalinity
 
-    Includes rigorous hydraulics (Ergun, Richardson-Zaki) and optional
-    knowledge-based performance prediction when PHREEQC unavailable.
-
     Args:
-        configuration_input: Dict with 'water_analysis', 'resin_type', and targets
+        configuration_input: Pydantic model with water_analysis, resin_type, targets, and response_format
 
     Returns:
         Dict with vessel configuration, hydraulic analysis, regeneration sequence,
@@ -647,35 +692,24 @@ async def configure_wac_ix(configuration_input: Dict[str, Any]) -> Dict[str, Any
     import time
     start_time = time.time()
     logger.info(f"configure_wac_ix started at {start_time}")
-    
+
     try:
-        import json
         import asyncio
-        
-        # Handle both string and object inputs
-        if isinstance(configuration_input, str):
-            try:
-                configuration_input = json.loads(configuration_input)
-            except json.JSONDecodeError:
-                return {
-                    "error": "Invalid JSON input",
-                    "details": "Input must be a valid JSON object or dict"
-                }
-        
-        # Validate input size
-        input_size = len(json.dumps(configuration_input))
-        if input_size > MAX_REQUEST_SIZE:
-            return {
-                "error": "Request too large",
-                "details": f"Request size {input_size} bytes exceeds maximum {MAX_REQUEST_SIZE} bytes"
-            }
-        
-        # Convert dict to pydantic model
-        wac_input = WACConfigurationInput(**configuration_input)
-        
+
+        # Extract response format before converting
+        response_format = configuration_input.response_format
+
+        # Build WAC input from MCP input
+        wac_input = WACConfigurationInput(
+            water_analysis=configuration_input.water_analysis,
+            resin_type=configuration_input.resin_type,
+            target_hardness_mg_l_caco3=configuration_input.target_hardness_mg_l_caco3,
+            target_alkalinity_mg_l_caco3=configuration_input.target_alkalinity_mg_l_caco3
+        )
+
         # Log before calling the function
         logger.info(f"Configuring WAC {wac_input.resin_type} vessel")
-        
+
         # Run synchronous function in thread pool
         loop = asyncio.get_event_loop()
         try:
@@ -690,14 +724,21 @@ async def configure_wac_ix(configuration_input: Dict[str, Any]) -> Dict[str, Any
                 "error": "Configuration timeout",
                 "details": "The configuration process took too long to complete"
             }
-        
+
         # Convert result to dict
         output = result.model_dump()
-        
+
         elapsed = time.time() - start_time
         logger.info(f"configure_wac_ix completed in {elapsed:.2f} seconds")
+
+        # Format output based on response_format
+        if response_format == ResponseFormat.MARKDOWN:
+            vessel_md = format_vessel_config_markdown(output.get("vessel_configuration", {}))
+            full_md = format_as_markdown(output, title=f"WAC ({configuration_input.resin_type}) Vessel Configuration")
+            return {"content": f"{vessel_md}\n\n{full_md}", "format": "markdown"}
+
         return output
-        
+
     except Exception as e:
         logger.error(f"WAC configuration failed: {e}")
         return {
@@ -708,6 +749,14 @@ async def configure_wac_ix(configuration_input: Dict[str, Any]) -> Dict[str, Any
 
 if NOTEBOOK_RUNNER_AVAILABLE:
     @mcp.tool(
+        name="ix_generate_report",
+        annotations={
+            "title": "Generate IX Report",
+            "readOnlyHint": False,
+            "destructiveHint": False,
+            "idempotentHint": True,
+            "openWorldHint": False
+        },
         description="""Generate professional IX report from simulation artifacts.
 
         Creates HTML report with:
@@ -764,6 +813,14 @@ if NOTEBOOK_RUNNER_AVAILABLE:
 
 # Add hybrid simulation tool
 @mcp.tool(
+    name="ix_simulate_watertap",
+    annotations={
+        "title": "Run IX Simulation",
+        "readOnlyHint": False,
+        "destructiveHint": False,
+        "idempotentHint": False,
+        "openWorldHint": True
+    },
     description="""Run hybrid IX simulation with PHREEQC chemistry and WaterTAP costing.
     
     This tool provides the best of both worlds:
@@ -923,6 +980,14 @@ async def simulate_ix_watertap(simulation_input: str) -> Dict[str, Any]:
 # ==============================================================================
 
 @mcp.tool(
+    name="ix_get_job_status",
+    annotations={
+        "title": "Get Job Status",
+        "readOnlyHint": True,
+        "destructiveHint": False,
+        "idempotentHint": True,
+        "openWorldHint": False
+    },
     description="""
     Get status of a background IX simulation job.
 
@@ -934,7 +999,7 @@ async def simulate_ix_watertap(simulation_input: str) -> Dict[str, Any]:
         elapsed_time, and progress hints
     """
 )
-async def get_job_status(job_id: str) -> Dict[str, Any]:
+async def ix_get_job_status(job_id: str) -> Dict[str, Any]:
     """Get status of a background job."""
     from utils.job_manager import JobManager
     manager = JobManager()
@@ -942,6 +1007,14 @@ async def get_job_status(job_id: str) -> Dict[str, Any]:
 
 
 @mcp.tool(
+    name="ix_get_job_results",
+    annotations={
+        "title": "Get Job Results",
+        "readOnlyHint": True,
+        "destructiveHint": False,
+        "idempotentHint": True,
+        "openWorldHint": False
+    },
     description="""
     Get results from a completed IX simulation job.
 
@@ -953,7 +1026,7 @@ async def get_job_status(job_id: str) -> Dict[str, Any]:
         and log file paths. Returns error if job is not completed.
     """
 )
-async def get_job_results(job_id: str) -> Dict[str, Any]:
+async def ix_get_job_results(job_id: str) -> Dict[str, Any]:
     """Get results from a completed background job."""
     from utils.job_manager import JobManager
     manager = JobManager()
@@ -961,6 +1034,14 @@ async def get_job_results(job_id: str) -> Dict[str, Any]:
 
 
 @mcp.tool(
+    name="ix_get_breakthrough_data",
+    annotations={
+        "title": "Get Breakthrough Data",
+        "readOnlyHint": True,
+        "destructiveHint": False,
+        "idempotentHint": True,
+        "openWorldHint": False
+    },
     description="""
     Get breakthrough curve data from a completed IX simulation job.
 
@@ -975,33 +1056,79 @@ async def get_job_results(job_id: str) -> Dict[str, Any]:
         Returns error if job not found, not completed, or has no breakthrough data.
     """
 )
-async def get_breakthrough_data(job_id: str) -> Dict[str, Any]:
+async def ix_get_breakthrough_data(job_id: str) -> Dict[str, Any]:
     """Get breakthrough curve data from a completed simulation job."""
     from utils.job_manager import JobManager
     manager = JobManager()
     return await manager.get_breakthrough_data(job_id)
 
 
+# Pydantic model for list_jobs input
+class ListJobsInput(BaseModel):
+    """Input for listing background jobs with pagination."""
+    status_filter: Optional[str] = Field(
+        default=None,
+        description="Filter by status: 'running', 'completed', 'failed', or None for all"
+    )
+    limit: int = Field(
+        default=20,
+        ge=1,
+        le=100,
+        description="Maximum number of jobs to return per page (1-100)"
+    )
+    offset: int = Field(
+        default=0,
+        ge=0,
+        description="Number of jobs to skip for pagination"
+    )
+
+
 @mcp.tool(
+    name="ix_list_jobs",
+    annotations={
+        "title": "List Jobs",
+        "readOnlyHint": True,
+        "destructiveHint": False,
+        "idempotentHint": True,
+        "openWorldHint": False
+    },
     description="""
     List all background IX simulation jobs with optional status filter.
 
     Args:
         status_filter: Filter by status ("running", "completed", "failed", or None for all)
-        limit: Maximum number of jobs to return (default: 20)
+        limit: Maximum number of jobs to return (default: 20, max: 100)
+        offset: Number of jobs to skip for pagination (default: 0)
 
     Returns:
-        Dict with jobs list, total count, running jobs count, and max concurrent limit
+        Dict with:
+        - jobs: List of job info (id, status, command, started_at, elapsed_time)
+        - pagination: {total, count, offset, limit, has_more, next_offset}
+        - filter: Applied status filter
+        - running_jobs: Count of currently running jobs
+        - max_concurrent: Maximum concurrent jobs allowed
     """
 )
-async def list_jobs(status_filter: str = None, limit: int = 20) -> Dict[str, Any]:
-    """List all background jobs with optional status filter."""
+async def ix_list_jobs(params: ListJobsInput) -> Dict[str, Any]:
+    """List all background jobs with optional status filter and pagination."""
     from utils.job_manager import JobManager
     manager = JobManager()
-    return await manager.list_jobs(status_filter, limit)
+    return await manager.list_jobs(
+        status_filter=params.status_filter,
+        limit=params.limit,
+        offset=params.offset
+    )
 
 
 @mcp.tool(
+    name="ix_terminate_job",
+    annotations={
+        "title": "Terminate Job",
+        "readOnlyHint": False,
+        "destructiveHint": True,
+        "idempotentHint": True,
+        "openWorldHint": False
+    },
     description="""
     Terminate a running IX simulation job.
 
@@ -1012,7 +1139,7 @@ async def list_jobs(status_filter: str = None, limit: int = 20) -> Dict[str, Any
         Dict with termination status and message
     """
 )
-async def terminate_job(job_id: str) -> Dict[str, Any]:
+async def ix_terminate_job(job_id: str) -> Dict[str, Any]:
     """Terminate a running background job."""
     from utils.job_manager import JobManager
     manager = JobManager()
@@ -1035,18 +1162,18 @@ def main():
     # Log available tools
     logger.info("Available tools:")
     logger.info("  Design Tools:")
-    logger.info("    - configure_sac_ix: SAC vessel hydraulic sizing")
-    logger.info("    - configure_wac_ix: WAC vessel hydraulic sizing (Na-form or H-form)")
-    logger.info("    - simulate_ix_watertap: Unified simulation (runs in background)")
+    logger.info("    - ix_configure_sac: SAC vessel hydraulic sizing")
+    logger.info("    - ix_configure_wac: WAC vessel hydraulic sizing (Na-form or H-form)")
+    logger.info("    - ix_simulate_watertap: Unified simulation (runs in background)")
     logger.info("  Job Management Tools:")
-    logger.info("    - get_job_status: Check status of background job")
-    logger.info("    - get_job_results: Retrieve results from completed job")
-    logger.info("    - get_breakthrough_data: Get breakthrough curve data")
-    logger.info("    - list_jobs: List all background jobs")
-    logger.info("    - terminate_job: Stop a running background job")
+    logger.info("    - ix_get_job_status: Check status of background job")
+    logger.info("    - ix_get_job_results: Retrieve results from completed job")
+    logger.info("    - ix_get_breakthrough_data: Get breakthrough curve data")
+    logger.info("    - ix_list_jobs: List all background jobs")
+    logger.info("    - ix_terminate_job: Stop a running background job")
     if NOTEBOOK_RUNNER_AVAILABLE:
         logger.info("  Optional:")
-        logger.info("    - run_sac_notebook_analysis: Integrated analysis with Jupyter notebook")
+        logger.info("    - ix_generate_report: Professional IX report generation")
     
     # Log timeout configuration
     phreeqc_timeout = int(os.environ.get('PHREEQC_RUN_TIMEOUT_S', '600'))

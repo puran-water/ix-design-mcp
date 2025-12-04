@@ -1,0 +1,182 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ix-design-mcp"
+version = "1.0.0"
+description = "MCP server for ion exchange system design optimization"
+readme = "README.md"
+license = {text = "MIT"}
+requires-python = ">=3.8"
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Topic :: Scientific/Engineering :: Chemistry",
+]
+keywords = ["ion-exchange", "water-treatment", "mcp", "phreeqc", "watertap"]
+dependencies = [
+    "fastmcp>=0.1.0",
+    "pydantic>=2.0.0",
+    "numpy>=1.24.0",
+    "pandas>=2.0.0",
+    "scipy>=1.7.0",
+    "python-dotenv>=1.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0.0",
+    "pytest-cov>=4.0.0",
+    "pytest-asyncio>=0.21.0",
+    "black>=23.0.0",
+    "isort>=5.12.0",
+    "flake8>=6.0.0",
+    "mypy>=1.0.0",
+    "pre-commit>=3.0.0",
+]
+watertap = [
+    "pyomo>=6.7.0",
+    "idaes-pse>=2.2.0",
+    "watertap>=0.11.0",
+]
+all = [
+    "ix-design-mcp[dev,watertap]",
+]
+
+[project.scripts]
+ix-design-mcp = "server:main"
+
+# =============================================================================
+# Black Configuration
+# =============================================================================
+[tool.black]
+line-length = 100
+target-version = ['py38', 'py39', 'py310', 'py311']
+include = '\.pyi?$'
+exclude = '''
+/(
+    \.eggs
+    | \.git
+    | \.hg
+    | \.mypy_cache
+    | \.tox
+    | \.venv
+    | _build
+    | buck-out
+    | build
+    | dist
+    | __pycache__
+)/
+'''
+
+# =============================================================================
+# isort Configuration
+# =============================================================================
+[tool.isort]
+profile = "black"
+line_length = 100
+known_first_party = ["tools", "utils", "watertap_ix_transport"]
+known_third_party = ["fastmcp", "pydantic", "numpy", "pandas", "scipy"]
+sections = ["FUTURE", "STDLIB", "THIRDPARTY", "FIRSTPARTY", "LOCALFOLDER"]
+skip_gitignore = true
+
+# =============================================================================
+# Flake8 Configuration (via flake8-pyproject)
+# =============================================================================
+[tool.flake8]
+max-line-length = 100
+extend-ignore = [
+    "E203",  # whitespace before ':' (conflicts with black)
+    "E501",  # line too long (handled by black)
+    "W503",  # line break before binary operator (conflicts with black)
+    "E731",  # do not assign a lambda expression
+]
+exclude = [
+    ".git",
+    "__pycache__",
+    "build",
+    "dist",
+    ".eggs",
+    "*.egg-info",
+    ".venv",
+    "venv",
+]
+per-file-ignores = [
+    "__init__.py:F401",
+    "tests/*:S101",
+]
+
+# =============================================================================
+# MyPy Configuration
+# =============================================================================
+[tool.mypy]
+python_version = "3.8"
+warn_return_any = true
+warn_unused_ignores = true
+ignore_missing_imports = true
+disallow_untyped_defs = false
+check_untyped_defs = true
+no_implicit_optional = true
+strict_equality = true
+show_error_codes = true
+show_column_numbers = true
+
+[[tool.mypy.overrides]]
+module = [
+    "watertap.*",
+    "idaes.*",
+    "pyomo.*",
+    "phreeqpython.*",
+]
+ignore_missing_imports = true
+
+# =============================================================================
+# Pytest Configuration
+# =============================================================================
+[tool.pytest.ini_options]
+minversion = "7.0"
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+addopts = "-v --strict-markers"
+markers = [
+    "slow: marks tests as slow (deselect with '-m \"not slow\"')",
+    "integration: marks tests requiring PHREEQC",
+    "unit: marks unit tests (fast, no external deps)",
+    "sac: marks SAC-specific tests",
+    "wac: marks WAC-specific tests",
+    "economics: marks economics/costing tests",
+    "hydraulics: marks hydraulic calculation tests",
+]
+filterwarnings = [
+    "ignore::DeprecationWarning",
+    "ignore::PendingDeprecationWarning",
+]
+
+# =============================================================================
+# Coverage Configuration
+# =============================================================================
+[tool.coverage.run]
+source = ["tools", "utils", "watertap_ix_transport"]
+omit = ["tests/*", "*/__pycache__/*", "*/debug_*"]
+branch = true
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "def __repr__",
+    "raise NotImplementedError",
+    "if __name__ == .__main__.:",
+    "if TYPE_CHECKING:",
+    "@abstractmethod",
+]
+fail_under = 60
+show_missing = true

@@ -120,6 +120,10 @@ class WACPerformanceMetrics(BaseModel):
     max_effluent_ph: float
     co2_generation_mg_l: float
     
+    # Average effluent concentrations (mg/L) across entire service run
+    avg_effluent_hardness_mg_l_caco3: Optional[float] = None
+    avg_effluent_alkalinity_mg_l_caco3: Optional[float] = None  # WAC H-form only
+
     # Additional metrics
     active_sites_percent_final: Optional[float] = None  # For H-form
     temporary_hardness_removed_percent: Optional[float] = None
@@ -950,6 +954,10 @@ END
         avg_mg_removal = 0
         avg_hardness_removal = 0
         avg_alk_removal = 0
+
+        # Average effluent concentrations (mg/L) - will be populated if data available
+        avg_effluent_hardness = None
+        avg_effluent_alk = None
         
         if len(bvs) > 0 and breakthrough_idx > 0:
             # Use trapezoidal integration for BV-weighted average
@@ -979,6 +987,7 @@ END
                 hardness_valid = np.array([x if x is not None else 0 for x in hardness_to_breakthrough])
                 bvs_valid = np.array([x if x is not None else 0 for x in bvs_to_breakthrough])
                 avg_hardness = np.trapz(hardness_valid, bvs_valid) / breakthrough_bv if breakthrough_bv > 0 else 0
+                avg_effluent_hardness = float(avg_hardness)  # Store mg/L value
                 avg_hardness_removal = 100 * (1 - avg_hardness / feed_hardness)
                 avg_hardness_removal = max(0, min(100, avg_hardness_removal))
             
@@ -988,6 +997,7 @@ END
                 alk_valid = np.array([max(0, x) if x is not None else 0 for x in alk_to_breakthrough])
                 bvs_valid = np.array([x if x is not None else 0 for x in bvs_to_breakthrough])
                 avg_alk = np.trapz(alk_valid, bvs_valid) / breakthrough_bv if breakthrough_bv > 0 else 0
+                avg_effluent_alk = float(avg_alk)  # Store mg/L value
                 avg_alk_removal = 100 * (1 - avg_alk / feed_alkalinity)
                 avg_alk_removal = max(0, min(100, avg_alk_removal))
         
@@ -1042,6 +1052,9 @@ END
             avg_mg_removal_percent=avg_mg_removal,
             avg_hardness_removal_percent=avg_hardness_removal,
             avg_alkalinity_removal_percent=avg_alk_removal,
+            # Average effluent concentrations (mg/L CaCO3)
+            avg_effluent_hardness_mg_l_caco3=avg_effluent_hardness,
+            avg_effluent_alkalinity_mg_l_caco3=avg_effluent_alk,
             # pH and CO2 stats
             average_effluent_ph=avg_ph,
             min_effluent_ph=min_ph,
