@@ -465,7 +465,60 @@ class BaseIXSimulation(ABC):
         
         # No breakthrough detected
         return float(bv_array[-1]) if len(bv_array) > 0 else 0.0, False, "No breakthrough detected"
-    
+
+    def _calculate_average_effluent(
+        self,
+        bv_array: np.ndarray,
+        concentration_array: np.ndarray,
+        breakthrough_bv: float
+    ) -> Optional[float]:
+        """
+        Calculate BV-weighted average effluent concentration from 0 to breakthrough.
+
+        Uses trapezoidal integration: avg = ∫C(BV)dBV / BV_total
+
+        This provides the average concentration in the total product water volume
+        produced during a service run, complementing the "endpoint" breakthrough
+        value which reports the concentration at the moment of breakthrough.
+
+        Args:
+            bv_array: Bed volumes array
+            concentration_array: Concentration array (mg/L)
+            breakthrough_bv: BV at breakthrough
+
+        Returns:
+            Average concentration (mg/L) or None if insufficient data
+        """
+        if breakthrough_bv <= 0 or len(bv_array) < 2:
+            return None
+
+        # Convert arrays to numpy if needed and handle None/NaN values
+        try:
+            bv_array = np.array([float(x) if x is not None else np.nan for x in bv_array])
+            conc_array = np.array([float(x) if x is not None else np.nan for x in concentration_array])
+        except (TypeError, ValueError):
+            return None
+
+        # Mask to data at or before breakthrough
+        mask = (bv_array <= breakthrough_bv) & ~np.isnan(bv_array) & ~np.isnan(conc_array)
+        bv_to_bt = bv_array[mask]
+        conc_to_bt = conc_array[mask]
+
+        if len(bv_to_bt) < 2:
+            return None
+
+        # Trapezoidal integration
+        integral = np.trapz(conc_to_bt, bv_to_bt)
+
+        # Average = integral / total BV range
+        bv_range = bv_to_bt[-1] - bv_to_bt[0]
+        if bv_range <= 0:
+            return None
+
+        avg_concentration = integral / bv_range
+
+        return float(avg_concentration)
+
     def _calculate_dynamic_max_bv(
         self,
         loading_meq_L: float,

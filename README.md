@@ -49,19 +49,33 @@ Key technical capabilities:
 
 ### MCP Tools Available
 
+All tools follow MCP best practices with `ix_` prefix naming convention and include tool annotations for proper client integration.
+
 #### Configuration Tools
-- `configure_sac_ix` - Size SAC vessels for hardness removal with N+1 redundancy
-- `configure_wac_ix` - Size WAC vessels (Na-form or H-form) for alkalinity control
+- `ix_configure_sac` - Size SAC vessels for hardness removal with N+1 redundancy
+- `ix_configure_wac` - Size WAC vessels (Na-form or H-form) for alkalinity control
+
+Both configuration tools support:
+- **Direct Pydantic model inputs** - Automatic JSON schema generation for clients
+- **Response format selection** - `response_format: "json"` (default) or `"markdown"` for human-readable output
 
 #### Simulation Tool
-- `simulate_ix_watertap` - Unified simulation with PHREEQC chemistry and WaterTAP costing
+- `ix_simulate_watertap` - Unified simulation with PHREEQC chemistry and WaterTAP costing
   - Handles SAC, WAC Na-form, and WAC H-form resins
   - Provides complete economic analysis (CAPEX, OPEX, LCOW)
   - Generates detailed breakthrough curves and performance metrics
   - Includes full regeneration cycle modeling with proper mass balance
+  - **Runs in background** - Returns job_id immediately for non-blocking operation
+
+#### Job Management Tools
+- `ix_get_job_status` - Check status of background simulation jobs
+- `ix_get_job_results` - Retrieve results from completed jobs
+- `ix_get_breakthrough_data` - Get full breakthrough curve data separately (reduces token usage)
+- `ix_list_jobs` - List all jobs with **full pagination support** (offset, limit, has_more, next_offset)
+- `ix_terminate_job` - Cancel running background jobs
 
 #### Report Generation Tool
-- `generate_ix_report` - Professional HTML report generation from simulation artifacts
+- `ix_generate_report` - Professional HTML report generation from simulation artifacts
   - Resin-specific report templates for SAC, WAC_Na, and WAC_H
   - Hydraulic design calculations with verification checks
   - Interactive breakthrough curve visualizations

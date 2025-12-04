@@ -1,5 +1,32 @@
 IX Design MCP Server – Changelog
 
+2.3.0 – 2025-12-04
+- **MCP Protocol Compliance**: Full alignment with MCP best practices
+  - Server renamed from "IX Design Server" to "ix_design_mcp" (lowercase with underscores)
+  - All tools renamed with `ix_` prefix: `ix_configure_sac`, `ix_configure_wac`, `ix_simulate_watertap`, etc.
+  - Added tool annotations (readOnlyHint, destructiveHint, idempotentHint, openWorldHint)
+  - Tools now accept direct Pydantic models for automatic JSON schema generation
+  - Added `response_format` parameter for JSON or Markdown output selection
+  - `ix_list_jobs` now returns full pagination metadata (total, count, offset, limit, has_more, next_offset)
+- **Code Architecture Improvements**:
+  - SAC simulation now properly inherits from BaseIXSimulation (removed legacy delegation pattern)
+  - Eliminated duplicate PHREEQC engine initialization code (~200 lines removed)
+  - Created `tools/exceptions.py` with typed exception hierarchy (IXDesignError, PHREEQCError, etc.)
+  - Created `tools/mcp_types.py` with ResponseFormat enum and markdown formatters
+- **Test Infrastructure**:
+  - Added `pytest.ini` with marker support (unit, integration, slow, sac, wac)
+  - Added `tests/conftest.py` with shared fixtures for water compositions
+  - Added `.coveragerc` for coverage configuration (70% threshold)
+  - Created `tests/mocks/mock_phreeqc.py` for unit testing without PHREEQC dependency
+- **Development Tooling**:
+  - Added `pyproject.toml` with black, isort, flake8, and mypy configuration
+  - Added `.pre-commit-config.yaml` for automated code quality checks
+  - Updated CI workflow with proper pytest markers and test organization
+- **Documentation**: Updated README with new tool names, pagination support, and response format options
+- Modified files: `server.py`, `tools/base_ix_simulation.py`, `tools/sac_simulation.py`, `tools/wac_simulation.py`, `utils/job_manager.py`, `.github/workflows/ix-tests.yml`
+- New files: `tools/mcp_types.py`, `tools/exceptions.py`, `pytest.ini`, `tests/conftest.py`, `.coveragerc`, `pyproject.toml`, `.pre-commit-config.yaml`, `tests/mocks/`
+- Why it matters: Better MCP client compatibility, cleaner codebase, improved testability
+
 2.2.1 – 2025-11-21
 - **CRITICAL**: Implemented auto-scaling for Pitzer + SURFACE numerical stability
   - Root cause (validated): Large site inventory (~18,000 mol) overwhelms Newton-Raphson solver with Pitzer database

@@ -20,20 +20,6 @@ jobs:
         os: [ubuntu-latest, windows-latest, macos-latest]
         python-version: ['3.8', '3.9', '3.10', '3.11']
         resin-type: ['SAC', 'WAC_H', 'WAC_Na']
-        include:
-          # Additional test configurations
-          - os: ubuntu-latest
-            python-version: '3.10'
-            resin-type: 'SAC'
-            test-kinetics: true
-          - os: ubuntu-latest
-            python-version: '3.10'
-            resin-type: 'SAC'
-            test-fouling: true
-          - os: windows-latest
-            python-version: '3.10'
-            resin-type: 'SAC'
-            test-graybox: true
     
     steps:
     - uses: actions/checkout@v3
@@ -101,41 +87,35 @@ jobs:
       run: |
         pip install -e .
     
-    - name: Run basic IX tests
+    - name: Run unit tests (fast, no PHREEQC required)
+      run: |
+        pytest tests/ -v -m "unit" --timeout=60
+
+    - name: Run hydraulics and economics tests
+      run: |
+        pytest tests/test_hydraulics.py tests/test_ix_economics.py -v --timeout=120
+
+    - name: Run integration tests (requires PHREEQC)
+      if: matrix.python-version == '3.10'
       env:
         RESIN_TYPE: ${{ matrix.resin-type }}
       run: |
-        pytest tests/test_ion_exchange_transport_0D.py -v --timeout=300
-    
-    - name: Run 3-step pattern test
+        pytest tests/ -v -m "integration" --timeout=300
+
+    - name: Run SAC-specific tests
+      if: matrix.resin-type == 'SAC'
       run: |
-        python tests/test_3step_fix.py
-    
-    - name: Run comprehensive test suite
+        pytest tests/ -v -m "sac" --timeout=300
+
+    - name: Run WAC-specific tests
+      if: matrix.resin-type == 'WAC_H' || matrix.resin-type == 'WAC_Na'
+      run: |
+        pytest tests/ -v -m "wac" --timeout=300
+
+    - name: Run equilibrium and selectivity tests
       if: matrix.python-version == '3.10' && matrix.os == 'ubuntu-latest'
       run: |
-        python tests/test_all_fixes.py
-    
-    - name: Run kinetics tests
-      if: matrix.test-kinetics
-      run: |
-        pytest tests/test_kinetic_model.py -v --timeout=300
-    
-    - name: Run fouling tests
-      if: matrix.test-fouling
-      run: |
-        pytest tests/test_fouling_model.py -v --timeout=300
-    
-    - name: Run GrayBox tests
-      if: matrix.test-graybox
-      run: |
-        python tests/test_simple_graybox.py
-        python tests/test_cross_database_graybox.py
-    
-    - name: Run performance benchmarks
-      if: matrix.python-version == '3.10' && matrix.os == 'ubuntu-latest' && matrix.resin-type == 'SAC'
-      run: |
-        python tests/benchmark_ix_performance.py
+        pytest tests/test_equilibrium_leakage.py tests/test_multicomponent_selectivity.py tests/test_fallback_selectivity.py -v --timeout=300
     
     - name: Upload test results
       if: always()
@@ -202,20 +182,15 @@ jobs:
         pip install -r requirements.txt
         pip install jupyter nbconvert
     
-    - name: Test notebook execution
+    - name: Test MCP server import
       run: |
-        # Convert and run notebooks
-        for notebook in notebooks/*.ipynb; do
-          echo "Testing $notebook"
-          jupyter nbconvert --to python "$notebook"
-          python "${notebook%.ipynb}.py" || echo "Failed: $notebook"
-        done
-    
-    - name: Test MCP server integration
+        # Test that the MCP server imports correctly
+        python -c "from server import mcp; print('Server import successful')"
+
+    - name: Run configurator integration tests
       run: |
-        # Test that the MCP server starts correctly
-        python server.py --test-mode || echo "Server test failed"
-    
-    - name: Run end-to-end tests
+        pytest tests/test_configurator_integration.py -v --timeout=300
+
+    - name: Run report generation tests
       run: |
-        python tests/test_e2e_ix_design.py
+        pytest tests/test_report_generation.py -v --timeout=300

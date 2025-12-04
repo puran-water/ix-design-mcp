@@ -102,7 +102,10 @@ class SACPerformanceMetrics(BaseModel):
     avg_ca_removal_percent: float
     avg_mg_removal_percent: float
     avg_hardness_removal_percent: float
-    
+
+    # Average effluent concentration (mg/L) across entire service run
+    avg_effluent_hardness_mg_l_caco3: Optional[float] = Field(default=None)
+
     # pH statistics
     average_effluent_ph: float = Field(default=7.8)
     min_effluent_ph: float = Field(default=7.0)
@@ -321,51 +324,86 @@ class SACSimulationOutput(BaseModel):
     total_cycle_time_hours: float  # No longer optional
 
 
-class SACSimulation:
-    """SAC ion exchange simulation using Direct PHREEQC engine."""
-    
+# Import base class for inheritance
+from .base_ix_simulation import BaseIXSimulation
+
+
+class SACSimulation(BaseIXSimulation):
+    """SAC ion exchange simulation using Direct PHREEQC engine.
+
+    Inherits from BaseIXSimulation to leverage common functionality:
+    - PHREEQC engine initialization (no more duplicate code)
+    - Breakthrough data extraction and filtering
+    - Water composition validation
+    - Smart data sampling
+
+    This class now uses inheritance instead of delegation for PHREEQC engine,
+    while still delegating simulation methods to _IXDirectPhreeqcSimulation
+    during the transition period.
+    """
+
     def __init__(self):
-        """Initialize SAC simulation."""
-        # Direct initialization without base class
-        logger.info("Initialized SACSimulation with unified PHREEQC engine")
-        
+        """Initialize SAC simulation.
+
+        Uses BaseIXSimulation's _initialize_phreeqc_engine() method
+        to avoid duplicating PHREEQC initialization logic.
+        """
+        # Call parent constructor which initializes self.engine
+        super().__init__()
+        logger.info("Initialized SACSimulation (inherits from BaseIXSimulation)")
+
         # Create legacy simulation instance for method access
-        # This is temporary - methods will be migrated directly to this class
-        self._legacy_sim = _IXDirectPhreeqcSimulation()
-        # Set engine attribute to match legacy's engine
-        self.engine = self._legacy_sim.engine
-    
+        # Note: We override its engine with our inherited one to avoid
+        # double initialization
+        self._legacy_sim = _IXDirectPhreeqcSimulation.__new__(_IXDirectPhreeqcSimulation)
+        self._legacy_sim.engine = self.engine  # Share the inherited engine
+
     def run_simulation(self, input_data):
         """Required abstract method from BaseIXSimulation.
-        
-        This is not used in current SAC workflow but required for inheritance.
+
+        SAC workflow uses run_sac_simulation or run_full_cycle_simulation instead.
+        This method is implemented to satisfy the ABC requirement.
         """
-        # Not implemented - SAC uses run_sac_simulation instead
-        raise NotImplementedError("Use run_sac_simulation or run_full_cycle_simulation instead")
-    
+        raise NotImplementedError(
+            "SAC workflow uses run_sac_simulation() or run_full_cycle_simulation(). "
+            "Use simulate_sac_phreeqc() as the main entry point."
+        )
+
     def run_sac_simulation(self, *args, **kwargs):
-        """Run SAC simulation - temporarily delegate to legacy class."""
-        # Replace legacy engine with our unified engine
-        self._legacy_sim.engine = self.engine
+        """Run SAC simulation - delegates to legacy implementation.
+
+        TODO: Migrate this method directly into this class.
+        """
         return self._legacy_sim.run_sac_simulation(*args, **kwargs)
-    
+
     def find_target_breakthrough(self, *args, **kwargs):
-        """Find breakthrough point - temporarily delegate to legacy class."""
+        """Find breakthrough point - delegates to legacy implementation.
+
+        TODO: Migrate this method directly into this class.
+        """
         return self._legacy_sim.find_target_breakthrough(*args, **kwargs)
-    
+
     def run_full_cycle_simulation(self, *args, **kwargs):
-        """Run full cycle simulation - temporarily delegate to legacy class."""
-        # Replace legacy engine with our unified engine
-        self._legacy_sim.engine = self.engine
+        """Run full cycle simulation - delegates to legacy implementation.
+
+        TODO: Migrate this method directly into this class.
+        """
         return self._legacy_sim.run_full_cycle_simulation(*args, **kwargs)
 
 
-# Legacy class - kept for backward compatibility temporarily
+# Legacy class - kept for backward compatibility during migration
 class _IXDirectPhreeqcSimulation:
     """Direct PHREEQC-based ion exchange simulation for SAC resins.
-    
-    DEPRECATED: This class is kept for backward compatibility.
-    New code should use SACSimulation which inherits from BaseIXSimulation.
+
+    .. deprecated:: 1.0.0
+        This class is deprecated and will be removed in a future version.
+        Use :class:`SACSimulation` which now inherits from :class:`BaseIXSimulation`
+        and provides the same functionality with better code organization.
+
+    Note:
+        The PHREEQC initialization code in this class is now duplicated.
+        SACSimulation uses the inherited _initialize_phreeqc_engine() method.
+        This class's __init__ is no longer called when used via SACSimulation.
     """
     
     def __init__(self):
@@ -2857,17 +2895,23 @@ def _calculate_sac_performance_metrics(
         avg_ca_removal = np.trapz(ca_removals, bv_to_bt) / breakthrough_bv if breakthrough_bv > 0 else 0
         avg_mg_removal = np.trapz(mg_removals, bv_to_bt) / breakthrough_bv if breakthrough_bv > 0 else 0
         avg_hardness_removal = np.trapz(hardness_removals, bv_to_bt) / breakthrough_bv if breakthrough_bv > 0 else 0
+
+        # Calculate average effluent hardness concentration (mg/L) using trapezoidal integration
+        bv_range = bv_to_bt[-1] - bv_to_bt[0] if len(bv_to_bt) > 1 else 0
+        avg_effluent_hardness = np.trapz(hardness_to_bt, bv_to_bt) / bv_range if bv_range > 0 else hardness_at_bt
     else:
         # If breakthrough at first point, use that value
         avg_ca_removal = breakthrough_ca_removal
         avg_mg_removal = breakthrough_mg_removal
         avg_hardness_removal = breakthrough_hardness_removal
-    
+        avg_effluent_hardness = hardness_at_bt
+
     return SACPerformanceMetrics(
         breakthrough_ca_removal_percent=max(0, min(100, breakthrough_ca_removal)),
         breakthrough_mg_removal_percent=max(0, min(100, breakthrough_mg_removal)),
         breakthrough_hardness_removal_percent=max(0, min(100, breakthrough_hardness_removal)),
         avg_ca_removal_percent=max(0, min(100, avg_ca_removal)),
         avg_mg_removal_percent=max(0, min(100, avg_mg_removal)),
-        avg_hardness_removal_percent=max(0, min(100, avg_hardness_removal))
+        avg_hardness_removal_percent=max(0, min(100, avg_hardness_removal)),
+        avg_effluent_hardness_mg_l_caco3=float(avg_effluent_hardness) if avg_effluent_hardness is not None else None
     )
