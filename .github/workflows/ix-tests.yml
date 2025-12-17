@@ -13,31 +13,31 @@ jobs:
   test-matrix:
     name: Test ${{ matrix.resin-type }} on ${{ matrix.os }} Python ${{ matrix.python-version }}
     runs-on: ${{ matrix.os }}
-    
+
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
         python-version: ['3.8', '3.9', '3.10', '3.11']
         resin-type: ['SAC', 'WAC_H', 'WAC_Na']
-    
+
     steps:
-    - uses: actions/checkout@v3
-    
+    - uses: actions/checkout@v4
+
     - name: Set up Python ${{ matrix.python-version }}
-      uses: actions/setup-python@v4
+      uses: actions/setup-python@v5
       with:
         python-version: ${{ matrix.python-version }}
-    
+
     - name: Cache pip packages
-      uses: actions/cache@v3
+      uses: actions/cache@v4
       with:
         path: ~/.cache/pip
         key: ${{ runner.os }}-pip-${{ matrix.python-version }}-${{ hashFiles('**/requirements*.txt') }}
         restore-keys: |
           ${{ runner.os }}-pip-${{ matrix.python-version }}-
           ${{ runner.os }}-pip-
-    
+
     - name: Install PHREEQC (Ubuntu)
       if: runner.os == 'Linux'
       run: |
@@ -50,7 +50,7 @@ jobs:
         sudo make
         sudo make install
         echo "/usr/local/bin" >> $GITHUB_PATH
-    
+
     - name: Install PHREEQC (Windows)
       if: runner.os == 'Windows'
       shell: powershell
@@ -61,7 +61,7 @@ jobs:
         Start-Process msiexec.exe -Wait -ArgumentList '/i phreeqc-installer.msi /quiet'
         # Add to PATH
         echo "C:\Program Files\USGS\phreeqc-3.8.6-17100-x64\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
-    
+
     - name: Install PHREEQC (macOS)
       if: runner.os == 'macOS'
       run: |
@@ -76,17 +76,17 @@ jobs:
           make
           sudo make install
         fi
-    
+
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip wheel setuptools
         pip install -r requirements.txt
         pip install pytest pytest-cov pytest-timeout
-    
+
     - name: Install package
       run: |
         pip install -e .
-    
+
     - name: Run unit tests (fast, no PHREEQC required)
       run: |
         pytest tests/ -v -m "unit" --timeout=60
@@ -116,10 +116,10 @@ jobs:
       if: matrix.python-version == '3.10' && matrix.os == 'ubuntu-latest'
       run: |
         pytest tests/test_equilibrium_leakage.py tests/test_multicomponent_selectivity.py tests/test_fallback_selectivity.py -v --timeout=300
-    
+
     - name: Upload test results
       if: always()
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
         name: test-results-${{ matrix.os }}-py${{ matrix.python-version }}-${{ matrix.resin-type }}
         path: |
@@ -130,35 +130,35 @@ jobs:
     name: Code Coverage
     runs-on: ubuntu-latest
     needs: test-matrix
-    
+
     steps:
-    - uses: actions/checkout@v3
-    
+    - uses: actions/checkout@v4
+
     - name: Set up Python 3.10
-      uses: actions/setup-python@v4
+      uses: actions/setup-python@v5
       with:
         python-version: '3.10'
-    
+
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
         pip install -r requirements.txt
         pip install pytest pytest-cov
-    
+
     - name: Run tests with coverage
       run: |
         pytest --cov=watertap_ix_transport --cov-report=xml --cov-report=html
-    
+
     - name: Upload coverage to Codecov
-      uses: codecov/codecov-action@v3
+      uses: codecov/codecov-action@v4
       with:
         token: ${{ secrets.CODECOV_TOKEN }}
         file: ./coverage.xml
         flags: unittests
         name: codecov-umbrella
-    
+
     - name: Upload coverage reports
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
         name: coverage-report
         path: htmlcov/
@@ -167,21 +167,21 @@ jobs:
     name: Integration Tests
     runs-on: ubuntu-latest
     needs: test-matrix
-    
+
     steps:
-    - uses: actions/checkout@v3
-    
+    - uses: actions/checkout@v4
+
     - name: Set up Python 3.10
-      uses: actions/setup-python@v4
+      uses: actions/setup-python@v5
       with:
         python-version: '3.10'
-    
+
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
         pip install -r requirements.txt
         pip install jupyter nbconvert
-    
+
     - name: Test MCP server import
       run: |
         # Test that the MCP server imports correctly
