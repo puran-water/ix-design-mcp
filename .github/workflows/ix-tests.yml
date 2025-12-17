@@ -42,10 +42,10 @@ jobs:
       if: runner.os == 'Linux'
       run: |
         sudo apt-get update
-        # Download and install PHREEQC
-        wget https://water.usgs.gov/water-resources/software/PHREEQC/phreeqc-3.8.6-17100-x64-linux.tar.gz
-        tar -xzf phreeqc-3.8.6-17100-x64-linux.tar.gz
-        cd phreeqc-3.8.6-17100
+        # Download and install PHREEQC from GitHub releases (USGS URLs are broken)
+        wget https://github.com/usgs-coupled/phreeqc3/releases/download/v3.8.8/phreeqc-3.8.8-17347.tar.gz
+        tar -xzf phreeqc-3.8.8-17347.tar.gz
+        cd phreeqc-3.8.8-17347
         sudo ./configure --prefix=/usr/local
         sudo make
         sudo make install
@@ -55,12 +55,12 @@ jobs:
       if: runner.os == 'Windows'
       shell: powershell
       run: |
-        # Download PHREEQC installer
-        Invoke-WebRequest -Uri "https://water.usgs.gov/water-resources/software/PHREEQC/phreeqc-3.8.6-17100-x64.msi" -OutFile "phreeqc-installer.msi"
+        # Download PHREEQC installer from GitHub releases
+        Invoke-WebRequest -Uri "https://github.com/usgs-coupled/phreeqc3/releases/download/v3.8.8/phreeqc-3.8.8-17347-x64.msi" -OutFile "phreeqc-installer.msi"
         # Silent install
         Start-Process msiexec.exe -Wait -ArgumentList '/i phreeqc-installer.msi /quiet'
         # Add to PATH
-        echo "C:\Program Files\USGS\phreeqc-3.8.6-17100-x64\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+        echo "C:\Program Files\USGS\phreeqc-3.8.8-17347-x64\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
 
     - name: Install PHREEQC (macOS)
       if: runner.os == 'macOS'
@@ -69,9 +69,9 @@ jobs:
         if command -v brew &> /dev/null; then
           brew install phreeqc || true
         else
-          wget https://water.usgs.gov/water-resources/software/PHREEQC/phreeqc-3.8.6-17100.tar.gz
-          tar -xzf phreeqc-3.8.6-17100.tar.gz
-          cd phreeqc-3.8.6-17100
+          wget https://github.com/usgs-coupled/phreeqc3/releases/download/v3.8.8/phreeqc-3.8.8-17347.tar.gz
+          tar -xzf phreeqc-3.8.8-17347.tar.gz
+          cd phreeqc-3.8.8-17347
           ./configure --prefix=/usr/local
           make
           sudo make install
