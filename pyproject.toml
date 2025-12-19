@@ -51,6 +51,10 @@ all = [
 [project.scripts]
 ix-design-mcp = "server:main"
 
+[tool.setuptools.packages.find]
+include = ["watertap_ix_transport*"]
+exclude = ["databases*", "notebooks*", "tests*"]
+
 # =============================================================================
 # Black Configuration
 # =============================================================================
