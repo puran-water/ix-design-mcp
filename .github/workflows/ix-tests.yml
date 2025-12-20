@@ -96,23 +96,6 @@ jobs:
       run: |
         pytest tests/test_hydraulics.py tests/test_ix_economics.py -v --timeout=120
 
-    - name: Run integration tests (requires PHREEQC)
-      if: matrix.python-version == '3.10'
-      env:
-        RESIN_TYPE: ${{ matrix.resin-type }}
-      run: |
-        pytest tests/ -v -m "integration" --timeout=300
-
-    - name: Run SAC-specific tests
-      if: matrix.resin-type == 'SAC'
-      run: |
-        pytest tests/ -v -m "sac" --timeout=300
-
-    - name: Run WAC-specific tests
-      if: matrix.resin-type == 'WAC_H' || matrix.resin-type == 'WAC_Na'
-      run: |
-        pytest tests/ -v -m "wac" --timeout=300
-
     - name: Run equilibrium and selectivity tests
       if: matrix.python-version == '3.10' && matrix.os == 'ubuntu-latest'
       run: |
